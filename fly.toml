@@ -1,0 +1,30 @@
+# fly secrets set DATABASE_URL='postgres://...aivencloud.com:.../defaultdb?sslmode=require'
+
+app = 'mcp-usage-plane'
+primary_region = 'yyz'
+
+[build]
+
+# Default is 5s. Gives the shutdown path room to drain the pool so an in-flight
+# usage transaction commits rather than being cut off, which for the ledger is
+# the difference between a retryable batch and a lost one.
+kill_timeout = '15s'
+
+[http_service]
+  internal_port = 8081
+  force_https = true
+  # Sidecars poll this on a short interval and fail closed once their snapshot
+  # ages out, so a cold start in that path is a customer-visible outage.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+  [http_service.concurrency]
+    type = 'requests'
+    soft_limit = 64
+    hard_limit = 128
+
+[[vm]]
+  memory = '512mb'
+  cpus = 1
