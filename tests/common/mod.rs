@@ -26,6 +26,10 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
 pub const ACCOUNT: &str = "acct_test";
+/// 32 bytes of nothing, base64. Fine for a scratch database.
+pub const SEALING_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+pub const SIGNUP_SECRET: &str = "signup-secret-not-a-real-secret";
+pub const WEBHOOK_SECRET: &str = "whsec_not_a_real_secret";
 pub const ADMIN_TOKEN: &str = "mup_admin_test_token_not_a_real_secret_0001";
 pub const EDGE_TOKEN: &str = "mup_edge_test_token_not_a_real_secret_0001";
 
@@ -98,9 +102,16 @@ macro_rules! require_db {
 impl Plane {
     /// Boot the binary against a scratch database of its own.
     pub async fn start(base_url: &str) -> Self {
+        Self::start_with_env(base_url, &[]).await
+    }
+
+    /// Boot with extra environment, for the billing and export suites.
+    ///
+    /// `extra` is applied last so a suite can override any default below.
+    pub async fn start_with_env(base_url: &str, extra: &[(&str, &str)]) -> Self {
         let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
         let db_url = create_scratch_database(base_url, port).await;
-        Self::boot(&db_url, port).await
+        Self::boot_with_env(&db_url, port, extra).await
     }
 
     /// Boot again against the same scratch database, without wiping it.
@@ -116,6 +127,10 @@ impl Plane {
     }
 
     async fn boot(db_url: &str, port: u16) -> Self {
+        Self::boot_with_env(db_url, port, &[]).await
+    }
+
+    async fn boot_with_env(db_url: &str, port: u16, extra: &[(&str, &str)]) -> Self {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mcp-usage-plane"));
         command
             .env("DATABASE_URL", db_url)
@@ -127,7 +142,17 @@ impl Plane {
             .env("PLANE_BOOTSTRAP_ACCOUNT_ID", ACCOUNT)
             .env("PLANE_BOOTSTRAP_ADMIN_TOKEN", ADMIN_TOKEN)
             .env("PLANE_BOOTSTRAP_EDGE_TOKEN", EDGE_TOKEN)
-            .env("RUST_LOG", "mcp_usage_plane=warn");
+            .env("RUST_LOG", "mcp_usage_plane=warn")
+            // A fixed key, so a sealed credential written by one boot can still
+            // be opened after a restart.
+            .env("SECRET_SEALING_KEY", SEALING_KEY)
+            // Export destinations in these suites point at loopback test
+            // servers, which production must never allow.
+            .env("ALLOW_LOOPBACK_DESTINATIONS", "1")
+            .env("EXPORT_DRAIN_INTERVAL_SECONDS", "1");
+        for (name, value) in extra {
+            command.env(name, value);
+        }
 
         let mut child = command.spawn().expect("spawn the control plane binary");
         let base = format!("http://127.0.0.1:{port}");

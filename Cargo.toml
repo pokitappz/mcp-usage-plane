@@ -31,13 +31,26 @@ chrono = { version = "0.4.42", default-features = false, features = ["clock", "s
 sha2 = "0.11.0"
 base64 = "0.23.0"
 getrandom = "0.3.4"
+hmac = "0.13.0"
+# Customer billing credentials are sealed at rest with the same AEAD and the same
+# `enc:<base64(nonce||ciphertext)>` envelope Backstock uses for POS tokens, so
+# there is one shape of sealed secret across the studio.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
+# rustls, never OpenSSL. No redirects: following a 3xx would carry a billing
+# credential to a host the allowlist never checked.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Already in the tree through reqwest. Named explicitly because `Url::host`
+# returns `url::Host`, which is the only API that parses an IPv6 literal
+# rather than handing back a bracketed string.
+url = "2.5"
 
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.20", default-features = false, features = ["env-filter", "fmt", "std"] }
 
 [dev-dependencies]
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio-test = "0.4"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 
 [profile.release]
 lto = "fat"

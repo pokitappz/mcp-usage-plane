@@ -1,0 +1,10 @@
+# Build output. The studio normally sets a shared CARGO_TARGET_DIR, but a clean
+# checkout without it will write here.
+/target
+
+# Local environment. Every credential this service uses is read from the
+# environment, so a stray .env is the most likely way one gets committed.
+.env
+.env.*
+
+.DS_Store

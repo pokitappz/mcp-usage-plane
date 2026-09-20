@@ -10,8 +10,12 @@
 #![warn(missing_docs, clippy::pedantic)]
 
 mod auth;
+mod billing;
 mod edge;
 mod error;
+mod export;
+mod providers;
+mod secret;
 mod tenants;
 mod usage;
 
@@ -27,6 +31,13 @@ use sqlx::postgres::PgPoolOptions;
 pub struct AppState {
     /// Connection pool.
     pub pool: PgPool,
+    /// Key that seals customer billing credentials at rest, when configured.
+    pub sealing: Option<secret::SealingKey>,
+    /// Whether a loopback export destination may be dialled. Off in production;
+    /// the integration suite turns it on to point a destination at a test server.
+    pub allow_loopback_destinations: bool,
+    /// The plane's own billing configuration.
+    pub billing: billing::PlaneBilling,
 }
 
 #[tokio::main]
@@ -58,14 +69,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrate(&pool).await?;
     bootstrap(&pool).await?;
 
-    let state = AppState { pool };
+    // A sealing key that is present but malformed is a mistake, and the right
+    // response to a mistake is to refuse to start rather than silently store
+    // the next billing credential without protection.
+    let sealing = secret::key_from_env()?;
+    if sealing.is_none() {
+        tracing::warn!(
+            "{} is not set; billing credentials cannot be stored until it is",
+            secret::KEY_VAR
+        );
+    }
+    let allow_loopback_destinations = std::env::var("ALLOW_LOOPBACK_DESTINATIONS")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+    if allow_loopback_destinations {
+        tracing::warn!("loopback export destinations are enabled; this is for tests only");
+    }
+
+    let plane_billing = billing::PlaneBilling::from_env();
+    tracing::info!(?plane_billing, "plane billing configuration");
+
+    let state = AppState {
+        pool,
+        sealing,
+        allow_loopback_destinations,
+        billing: plane_billing,
+    };
     let app = Router::new()
         .route("/healthz", routing::get(healthz))
         .merge(tenants::router())
         .merge(usage::router())
         .merge(edge::router())
+        .merge(export::router())
+        .merge(billing::router())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state.clone());
+
+    let drain_interval = Duration::from_secs(
+        std::env::var("EXPORT_DRAIN_INTERVAL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(30),
+    );
+    let drain = tokio::spawn(export::drain_forever(state.clone(), drain_interval));
+    let biller = tokio::spawn(billing::bill_forever(state.clone(), drain_interval));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -75,6 +121,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
+    // The drain marks rows settled only after the provider has accepted them,
+    // so stopping mid-cycle costs at most one repeat submission, which every
+    // provider deduplicates on the identifier.
+    drain.abort();
+    biller.abort();
     // Draining the pool lets in-flight transactions finish rather than being
     // cut off mid-commit, which for the usage ledger is the difference between
     // a retryable batch and a silently lost one.
