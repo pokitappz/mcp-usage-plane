@@ -60,7 +60,7 @@ prices.
 | `GET /v1/billing` | admin | Subscription status and unbilled units |
 | `PUT /v1/billing` | admin | Link the account to a Stripe customer |
 | `POST /v1/signup` | none | Self-serve signup, gated by a shared secret |
-| `POST /v1/stripe/webhook` | signature | Subscription lifecycle from Stripe |
+| `POST /v1/stripe/webhook` | signature | Subscription lifecycle and invoice outcomes from Stripe |
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
 snapshot, and the sidecar cannot authenticate a key it was never given.
@@ -148,6 +148,30 @@ This drives `MeterEventProvider` directly rather than going through
 partial retry progress and a bounded dead letter queue in memory; the plane has
 a database, and a second weaker copy of that state would only add something to
 disagree with the ledger and die with the process.
+
+## Stripe
+
+The outbound `Stripe-Version` is pinned at `2026-08-26.dahlia`. The inbound
+check on a webhook's `api_version` is against the **release suffix** only, not
+the dated version: within a release every later monthly version is additive, so
+matching the exact date would raise a false alarm the moment Stripe ships the
+next one. Bumping the pin is therefore a one-constant change, and a recurring
+monthly calendar item rather than a migration.
+
+Two Stripe details this code learned the hard way, recorded so they are not
+re-derived:
+
+- **`current_period_end` is not on the Subscription object.** It lives on each
+  subscription item, at `items.data[].current_period_end`
+  (<https://docs.stripe.com/api/subscriptions/object>). Reading it from the top
+  level yields `None` on every delivery, and a `COALESCE` in the UPDATE then
+  swallows that silently, leaving the column NULL forever. The maximum across
+  items is used, because items can bill on different anchors.
+- **The meter-error notification is a v2 thin event.** Stripe reports rejected
+  meter events as `v1.billing.meter.error_report_triggered`, which despite the
+  `v1.` prefix is delivered to a v2 event destination and does not appear in
+  the v1 snapshot event list at all. It is *not* handled here yet; until it is,
+  meter events Stripe drops are invisible.
 
 ## Idempotency
 

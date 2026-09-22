@@ -30,7 +30,7 @@ use sha2::Sha256;
 type HmacSha256 = Hmac<Sha256>;
 
 /// The Stripe release this code's request and response shapes target.
-pub const STRIPE_API_VERSION: &str = "2026-07-29.dahlia";
+pub const STRIPE_API_VERSION: &str = "2026-08-26.dahlia";
 /// Only the first version in a release carries breaking changes and every later
 /// monthly version in it is additive, so the inbound check is against the
 /// release rather than one dated version. Matching the exact version would
