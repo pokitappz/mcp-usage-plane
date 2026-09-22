@@ -37,36 +37,38 @@ const DRAIN_BATCH: i64 = 200;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Direction {
     /// The account's usage to the account's own billing provider.
+    ///
+    /// The only direction this drain has. It used to have a second, `Upstream`,
+    /// which forwarded the same events to the plane's own Stripe account one
+    /// unit at a time. That is now a monthly close in `crate::pricing`, so the
+    /// variant went with it. The `direction` column on `export_dead_letters`
+    /// still accepts `'upstream'`, because rows written by the old mechanism
+    /// are history and history should stay readable.
     Downstream,
-    /// The usage the plane processed, to the plane's own billing provider.
-    Upstream,
 }
 
 impl Direction {
     const fn column(self) -> &'static str {
         match self {
             Self::Downstream => "exported_at",
-            Self::Upstream => "plane_billed_at",
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
             Self::Downstream => "downstream",
-            Self::Upstream => "upstream",
         }
     }
 
     /// The identifier presented to the provider.
     ///
-    /// The two directions can reach the same provider account, so the upstream
-    /// event is namespaced. Without it a customer forwarding to the same Stripe
-    /// account the plane bills through would see one of the two silently
-    /// deduplicated away.
+    /// Passed through unchanged. A customer forwarding to the same Stripe
+    /// account the plane bills through still needs the plane's own charges to
+    /// be distinguishable, which is why `plane_invoices` namespaces its
+    /// identifiers as `planeperiod:` rather than reusing an aggregate's.
     fn identifier_for(self, identifier: &str) -> String {
         match self {
             Self::Downstream => identifier.to_owned(),
-            Self::Upstream => format!("plane:{identifier}"),
         }
     }
 }
@@ -108,7 +110,7 @@ impl Destination {
     }
 
     /// Build the provider this destination describes.
-    fn provider(
+    pub(crate) fn provider(
         &self,
         allow_loopback: bool,
     ) -> Option<Box<dyn MeterEventProvider + Send + Sync + '_>> {
@@ -740,24 +742,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_upstream_identifier_is_namespaced_away_from_the_downstream_one() {
-        // A customer forwarding to the same Stripe account the plane bills
-        // through would otherwise see one of the two deduplicated away.
+    fn the_downstream_identifier_reaches_the_provider_unchanged() {
+        // The customer's own billing system deduplicates on this, so it has to
+        // be the aggregate's identifier and nothing else.
         assert_eq!(Direction::Downstream.identifier_for("agg-1"), "agg-1");
-        assert_eq!(Direction::Upstream.identifier_for("agg-1"), "plane:agg-1");
-        assert_ne!(
-            Direction::Downstream.identifier_for("agg-1"),
-            Direction::Upstream.identifier_for("agg-1")
-        );
-    }
-
-    #[test]
-    fn each_direction_owns_its_own_column() {
-        // Sharing one column would make a downstream retry re-bill the plane,
-        // or a plane-billing retry re-export to the customer.
         assert_eq!(Direction::Downstream.column(), "exported_at");
-        assert_eq!(Direction::Upstream.column(), "plane_billed_at");
-        assert_ne!(Direction::Downstream.column(), Direction::Upstream.column());
     }
 
     #[test]

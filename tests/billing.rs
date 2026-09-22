@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::Datelike as _;
+
 use common::Plane;
 use hmac::digest::KeyInit as _;
 use hmac::{Hmac, Mac};
@@ -45,6 +47,20 @@ impl FakeStripe {
                 body.split('&')
                     .find_map(|pair| pair.strip_prefix("identifier="))
                     .map(str::to_owned)
+            })
+            .collect()
+    }
+
+    /// The `payload[value]` of each submitted meter event.
+    fn values(&self) -> Vec<u64> {
+        self.received
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|body| {
+                body.split('&')
+                    .find_map(|pair| pair.strip_prefix("payload%5Bvalue%5D="))
+                    .and_then(|value| value.parse().ok())
             })
             .collect()
     }
@@ -356,8 +372,33 @@ async fn a_permanent_rejection_is_quarantined_and_reconcilable() {
 
 // --------------------------------------------------------------- upstream
 
+/// The first instant of last month, as RFC 3339.
+///
+/// Terms default to starting now, so a test that wants a finished period
+/// invoiced has to backdate them - which is the behaviour being relied on, not
+/// a workaround: agreeing terms today must not retroactively bill an account
+/// for the months before it had any.
+fn start_of_last_month() -> String {
+    chrono::Utc::now()
+        .date_naive()
+        .with_day(1)
+        .expect("the first of this month")
+        .pred_opt()
+        .expect("the last day of last month")
+        .with_day(1)
+        .expect("the first of last month")
+        .and_hms_opt(0, 0, 0)
+        .expect("midnight")
+        .and_utc()
+        .to_rfc3339()
+}
+
 #[tokio::test]
-async fn upstream_billing_reattributes_usage_to_the_accounts_own_customer() {
+async fn a_closed_period_charges_the_floor_when_there_was_no_usage() {
+    // The reason the plane's own billing became period-grained. A floor is a
+    // property of a period; the old per-unit drip had no periods and so could
+    // not express a minimum at all - an account with no usage was charged
+    // nothing, however its contract read.
     let db = require_db!();
     let fake = FakeStripe::new();
     let endpoint = spawn_stripe(fake.clone()).await;
@@ -365,12 +406,11 @@ async fn upstream_billing_reattributes_usage_to_the_accounts_own_customer() {
         &db,
         &[
             ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
-            ("PLANE_STRIPE_METER_NAME", "mcp_units_processed"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
         ],
     )
     .await;
-    plane.seed_tenant("acme", "cus_enduser").await;
 
     plane
         .admin(
@@ -379,32 +419,170 @@ async fn upstream_billing_reattributes_usage_to_the_accounts_own_customer() {
             Some(json!({"stripe_customer_id": "cus_theaccount"})),
         )
         .await;
-    plane
-        .edge(
-            Method::POST,
-            "/v1/edge/usage",
-            Some(json!({"events": [usage_event("agg-1", 7)]})),
+    // 1.5% with a 49.00 monthly minimum.
+    let (status, _) = plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({
+                "rate_bps": 150,
+                "floor_micros": 49_000_000i64,
+                "starts_at": start_of_last_month()
+            })),
         )
         .await;
+    assert_eq!(status, 200);
 
-    eventually("the plane to bill its own customer", || async {
-        !fake.customers().is_empty()
+    eventually("the plane to close a period", || async {
+        !fake.values().is_empty()
     })
     .await;
 
-    assert_eq!(
-        fake.customers(),
-        vec!["cus_theaccount"],
-        "the plane invoices the account, not the account's end customer"
-    );
-    assert_eq!(
-        fake.identifiers(),
-        vec!["plane%3Aagg-1"],
-        "the upstream identifier is namespaced so it cannot collide downstream"
+    assert_eq!(fake.customers()[0], "cus_theaccount");
+    assert_eq!(fake.values()[0], 4_900, "49.00 in millionths is 4900 cents");
+    assert!(
+        fake.identifiers()[0].starts_with("planeperiod%3A"),
+        "the charge identifier must be period-shaped, not an aggregate's: {:?}",
+        fake.identifiers()[0]
     );
 
-    let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
-    assert_eq!(view["unbilled_units"], 0);
+    let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+    let closed = &invoices.as_array().expect("a list")[0];
+    assert_eq!(closed["charge_micros"], 49_000_000i64);
+    assert_eq!(closed["revenue_micros"], 0);
+    assert_eq!(closed["settled"], true);
+}
+
+#[tokio::test]
+async fn the_percentage_applies_once_revenue_passes_the_floor() {
+    // And the revenue it is a percentage of is the account's own metered
+    // revenue - what it charged its customers - which the plane already
+    // computes for spend caps and never used to read for its own billing.
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start_with_env(
+        &db,
+        &[
+            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
+            ("PLANE_STRIPE_ENDPOINT", &endpoint),
+        ],
+    )
+    .await;
+    // seed_tenant prices a unit at 1000 micros.
+    plane.seed_tenant("acme", "cus_enduser").await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_theaccount"})),
+        )
+        .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({
+                "rate_bps": 200,
+                "floor_micros": 0,
+                "starts_at": start_of_last_month()
+            })),
+        )
+        .await;
+
+    // Stamped inside last month, so it lands in a window that is finished.
+    // The current month is still accruing and is deliberately never closed.
+    let last_month = chrono::Utc::now()
+        .date_naive()
+        .with_day(1)
+        .expect("the first of this month")
+        .pred_opt()
+        .expect("the last day of last month")
+        .and_hms_opt(12, 0, 0)
+        .expect("midday")
+        .and_utc()
+        .timestamp();
+
+    let (status, _) = plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [{
+                "identifier": "agg-lastmonth",
+                "customer_id": "cus_enduser",
+                "meter": "mcp_units",
+                "units": 1_000_000,
+                "timestamp": last_month
+            }]})),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    eventually("the plane to close the period", || async {
+        !fake.values().is_empty()
+    })
+    .await;
+
+    // 1,000,000 units x 1000 micros = 1,000,000,000 micros of metered revenue.
+    // 2% of that is 20,000,000 micros, which is 2000 cents.
+    assert_eq!(fake.values()[0], 2_000);
+
+    let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+    let closed = &invoices.as_array().expect("a list")[0];
+    assert_eq!(closed["revenue_micros"], 1_000_000_000i64);
+    assert_eq!(closed["charge_micros"], 20_000_000i64);
+    assert_eq!(closed["units"], 1_000_000);
+}
+
+#[tokio::test]
+async fn a_period_is_charged_once_however_often_the_close_runs() {
+    // The close runs on the export interval, so it revisits the same finished
+    // period every cycle. Recomputing and resubmitting would bill an account
+    // once per tick for the rest of time.
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start_with_env(
+        &db,
+        &[
+            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
+            ("PLANE_STRIPE_ENDPOINT", &endpoint),
+            ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),
+        ],
+    )
+    .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_theaccount"})),
+        )
+        .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({
+                "rate_bps": 0,
+                "floor_micros": 25_000_000i64,
+                "starts_at": start_of_last_month()
+            })),
+        )
+        .await;
+
+    eventually("the first close", || async { !fake.values().is_empty() }).await;
+
+    // Several more cycles at a one second interval.
+    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+
+    assert_eq!(
+        fake.values().len(),
+        1,
+        "the period was charged {} times",
+        fake.values().len()
+    );
 }
 
 // ----------------------------------------------------------------- signup
@@ -807,4 +985,53 @@ async fn a_webhook_that_cannot_be_applied_is_not_left_claimed() {
 
     let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
     assert_eq!(view["status"], "active");
+}
+
+#[tokio::test]
+async fn agreeing_terms_today_does_not_invoice_the_months_before_them() {
+    // Found by the idempotency test above, which charged three times: the
+    // close walks back several finished periods, so a brand new account was
+    // being billed a floor for each month before it had any terms at all.
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start_with_env(
+        &db,
+        &[
+            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
+            ("PLANE_STRIPE_ENDPOINT", &endpoint),
+            ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),
+        ],
+    )
+    .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_theaccount"})),
+        )
+        .await;
+    // No `starts_at`: terms begin now, which is inside the current month.
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({"rate_bps": 150, "floor_micros": 49_000_000i64})),
+        )
+        .await;
+
+    // Several close cycles.
+    tokio::time::sleep(Duration::from_secs(4)).await;
+
+    assert!(
+        fake.values().is_empty(),
+        "no finished period is covered by terms that began today, but {} charges were sent",
+        fake.values().len()
+    );
+    let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+    assert!(
+        invoices.as_array().expect("a list").is_empty(),
+        "nothing should have been invoiced: {invoices}"
+    );
 }

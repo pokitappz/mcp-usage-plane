@@ -21,7 +21,7 @@ use sqlx::{PgPool, Row as _};
 use crate::AppState;
 use crate::auth::{AdminCaller, hash_token, mint_token};
 use crate::error::{ApiError, ApiResult};
-use crate::export::{Destination, Direction, drain_once};
+use crate::export::Destination;
 use crate::providers::stripe_version_is_current;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -607,55 +607,11 @@ fn subscription_period_end(object: &serde_json::Value) -> Option<DateTime<Utc>> 
     Utc.timestamp_opt(seconds, 0).single()
 }
 
-// ----------------------------------------------------------- upstream bill
-
-/// Bill every linked account for the usage the plane processed, forever.
-pub async fn bill_forever(state: AppState, interval: std::time::Duration) {
-    let destination = state.billing.destination();
-    if matches!(destination, Destination::None) {
-        tracing::info!("no plane Stripe key configured; upstream billing is idle");
-        return;
-    }
-    let mut ticker = tokio::time::interval(interval);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        ticker.tick().await;
-        if let Err(error) = bill_all(&state, &destination).await {
-            tracing::error!(%error, "upstream billing cycle failed");
-        }
-    }
-}
-
-async fn bill_all(state: &AppState, destination: &Destination) -> Result<(), sqlx::Error> {
-    // Only accounts the plane can actually invoice. An unlinked account keeps
-    // accumulating unbilled rows, which is visible in its billing view.
-    let rows = sqlx::query(
-        "SELECT account_id, stripe_customer_id FROM account_billing
-         WHERE stripe_customer_id IS NOT NULL",
-    )
-    .fetch_all(&state.pool)
-    .await?;
-
-    for row in rows {
-        let account_id: String = row.try_get("account_id")?;
-        let customer: String = row.try_get("stripe_customer_id")?;
-        match drain_once(
-            &state.pool,
-            state.allow_loopback_destinations,
-            &account_id,
-            Direction::Upstream,
-            destination,
-            Some(&customer),
-        )
-        .await
-        {
-            Ok(0) => {}
-            Ok(settled) => tracing::info!(account_id, settled, "billed the plane's own usage"),
-            Err(error) => tracing::error!(account_id, %error, "upstream billing drain failed"),
-        }
-    }
-    Ok(())
-}
+// The plane's own revenue is no longer a per-unit drip. It is a monthly close
+// in `crate::pricing`, because the model is `max(floor, rate x revenue)` and a
+// floor is a property of a period. The event ledger in `usage_events` is
+// unchanged and is still the audit trail; what became period-grained is the
+// charge.
 
 #[cfg(test)]
 mod tests {
