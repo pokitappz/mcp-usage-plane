@@ -90,19 +90,53 @@ fn bearer(parts: &Parts) -> Option<&str> {
 
 async fn resolve(state: &AppState, parts: &Parts) -> Result<Caller, ApiError> {
     let token = bearer(parts).ok_or(ApiError::Unauthorized)?;
+    // The hash, never the token, is the key for everything below. It is what
+    // the database stores, so nothing here has to hold a live credential.
+    let token_hash = hash_token(token);
+
+    // Rate limit before the cache and before the database. Checking it after
+    // would mean a client over budget still costs whatever the lookup costs,
+    // which is the thing the limit exists to bound.
+    if !state.admission.take_request(&token_hash) {
+        return Err(ApiError::TooManyRequests(
+            state.admission.retry_after_seconds(&token_hash),
+        ));
+    }
+
+    if let Some(caller) = state.admission.cached(&token_hash) {
+        return Ok(caller);
+    }
+
     let row = sqlx::query(
         "SELECT account_id, scope FROM account_tokens
          WHERE token_sha256 = $1 AND revoked_at IS NULL",
     )
-    .bind(hash_token(token))
+    .bind(&token_hash)
     .fetch_optional(&state.pool)
     .await?;
 
-    let row = row.ok_or(ApiError::Unauthorized)?;
+    let Some(row) = row else {
+        // A failure always reaches the database - there is nothing to cache -
+        // so it gets its own, tighter budget. Keyed on the presented hash, so
+        // one client working through a list of guesses is bounded even though
+        // every guess is a different key.
+        if !state.admission.take_failure(&token_hash) {
+            return Err(ApiError::TooManyRequests(
+                state.admission.retry_after_seconds(&token_hash),
+            ));
+        }
+        return Err(ApiError::Unauthorized);
+    };
+
     let account_id: String = row.try_get("account_id").map_err(ApiError::from)?;
     let scope: String = row.try_get("scope").map_err(ApiError::from)?;
     let scope = Scope::parse(&scope).ok_or(ApiError::Internal)?;
-    Ok(Caller { account_id, scope })
+    let caller = Caller { account_id, scope };
+
+    // Only successes are cached. Caching a failure would turn a token that was
+    // just minted into one that does not work yet.
+    state.admission.remember(&token_hash, &caller);
+    Ok(caller)
 }
 
 /// Extractor requiring an `admin` token.

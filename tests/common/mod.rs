@@ -226,6 +226,24 @@ impl Plane {
         self.send(method, path, body, Some(EDGE_TOKEN)).await
     }
 
+    /// Like [`Self::send`], but surfaces the response headers.
+    ///
+    /// The rate limiter's contract is a 429 *with* `Retry-After`; a test that
+    /// only sees the status cannot tell a useful refusal from a bare one.
+    pub async fn send_raw(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        token: Option<&str>,
+    ) -> (reqwest::StatusCode, reqwest::header::HeaderMap) {
+        let mut request = self.http.request(method, self.url(path));
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        let response = request.send().await.expect("request reaches the plane");
+        (response.status(), response.headers().clone())
+    }
+
     pub async fn send(
         &self,
         method: reqwest::Method,
