@@ -39,7 +39,10 @@ prices.
 
 | Route | Scope | Purpose |
 |---|---|---|
-| `GET /healthz` | none | Liveness, including a database round trip |
+| `GET /healthz` | none | Liveness, including a database round trip. Polled by the platform; the probe is cached briefly so it is not a free pool connection per call |
+| `POST /v1/tokens` | admin | Mint an account credential; the plaintext appears once |
+| `GET /v1/tokens` | admin | List account credentials, never the credentials themselves |
+| `DELETE /v1/tokens/{digest}` | admin | Revoke one. The last live admin token is refused |
 | `POST /v1/tenants` | admin | Create a tenant |
 | `GET /v1/tenants` | admin | List tenants |
 | `PATCH /v1/tenants/{key}` | admin | Update prices and limits |
@@ -61,6 +64,26 @@ prices.
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
 snapshot, and the sidecar cannot authenticate a key it was never given.
+
+## Request bounds
+
+Every request is admitted through a per-token budget and a short-lived
+authentication cache, both process-local.
+
+| Bound | Value | Why |
+|---|---|---|
+| Requests per token | 240 / minute | Refused with `429` and a `Retry-After`. Per token, so one customer's sidecar cannot deny service to another |
+| Failed authentications | 20 / minute | Tighter, and counted separately. A failure always reaches the database because there is nothing to cache |
+| Authentication cache | 10 seconds | Removes a database round trip from every request. Revoking a token calls through to drop the entry, so revocation does not wait for the TTL |
+| Request body | 64 KiB, or 4 MiB on `/v1/edge/usage` | Only the usage post legitimately carries a large body |
+| Request timeout | 30 seconds | Outermost, so a client that trickles its body cannot hold a pool connection indefinitely |
+| Statement timeout | 15 seconds | A query that never returns would otherwise hold one of ten pool connections until restart |
+
+The budgets are per instance. At `min_machines_running = 1` that is the whole
+service; scaling out makes each machine enforce its own, so treat them as
+self-protection rather than a fairness guarantee between customers. The same is
+true of the cache: a second instance still honours a revoked token until its own
+entry expires, which is why the window is ten seconds and not ten minutes.
 
 ## Billing export
 

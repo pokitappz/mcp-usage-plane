@@ -25,6 +25,18 @@ kill_timeout = '15s'
     soft_limit = 64
     hard_limit = 128
 
+  # Without this block Fly falls back to a TCP connect probe, so an instance
+  # that is listening but cannot reach Postgres stays in rotation - which is
+  # the exact failure `/healthz` was written to catch. The handler caches its
+  # probe for two seconds, so a five second interval costs one query per poll
+  # rather than one per request.
+  [[http_service.checks]]
+    interval = '5s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
 [[vm]]
   memory = '512mb'
   cpus = 1

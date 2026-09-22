@@ -23,6 +23,9 @@ pub enum ApiError {
     /// The resource already exists.
     #[error("{0}")]
     Conflict(String),
+    /// The caller has spent its request budget. Carries the seconds to wait.
+    #[error("too many requests")]
+    TooManyRequests(u64),
     /// Anything the caller cannot fix.
     #[error("internal error")]
     Internal,
@@ -45,6 +48,7 @@ impl IntoResponse for ApiError {
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = Json(json!({ "error": self.to_string() }));
@@ -54,6 +58,15 @@ impl IntoResponse for ApiError {
                 axum::http::header::WWW_AUTHENTICATE,
                 "Bearer".parse().unwrap(),
             );
+        }
+        // Without this a refused client has nothing to base a backoff on, and
+        // the usual answer to a bare 429 is to retry immediately.
+        if let Self::TooManyRequests(seconds) = self
+            && let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
         }
         response
     }

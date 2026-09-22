@@ -106,11 +106,22 @@ pub struct UsageAck {
 /// Largest batch accepted in one request.
 const MAX_BATCH: usize = 1_000;
 
+/// Room for a full `MAX_BATCH` post.
+///
+/// An identifier, customer, meter, units and timestamp per event, at 1,000
+/// events. Four megabytes is generous for that and still far below what an
+/// unbounded body would allow. The rest of the service runs on a much tighter
+/// default set in `main`; this route is the one that needs headroom.
+const USAGE_BODY_LIMIT: usize = 4 * 1024 * 1024;
+
 /// Edge routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/edge/snapshot", routing::get(snapshot))
-        .route("/v1/edge/usage", routing::post(ingest))
+        .route(
+            "/v1/edge/usage",
+            routing::post(ingest).layer(axum::extract::DefaultBodyLimit::max(USAGE_BODY_LIMIT)),
+        )
 }
 
 async fn snapshot(

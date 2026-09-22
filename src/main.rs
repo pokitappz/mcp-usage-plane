@@ -17,6 +17,8 @@ mod export;
 mod providers;
 mod secret;
 mod tenants;
+mod throttle;
+mod tokens;
 mod usage;
 
 use std::net::SocketAddr;
@@ -38,7 +40,25 @@ pub struct AppState {
     pub allow_loopback_destinations: bool,
     /// The plane's own billing configuration.
     pub billing: billing::PlaneBilling,
+    /// Most recent database probe, so an unauthenticated health poll does not
+    /// cost a query every time.
+    pub health: std::sync::Arc<throttle::HealthProbe>,
+    /// Per-token authentication cache and rate limiter.
+    ///
+    /// `Arc` because `AppState` is cloned per request and the budget has to be
+    /// shared; cloning the maps would give every request its own allowance.
+    pub admission: std::sync::Arc<throttle::Admission>,
 }
+
+/// Ceiling on every request body except the edge's usage post.
+///
+/// Bodies large enough to matter arrive on exactly one route: an edge may post
+/// `MAX_BATCH` usage events, and `edge::router` raises the ceiling for that
+/// route alone. Everything else here is small.
+const ADMIN_BODY_LIMIT: usize = 64 * 1024;
+
+/// Longest a single request may occupy a worker and a pool connection.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,6 +83,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or(10),
         )
         .acquire_timeout(Duration::from_secs(5))
+        // Nothing else bounds a slow query, and a query that never returns
+        // holds one of ten pool connections until the process restarts.
+        .after_connect(|conn, _| {
+            Box::pin(async move {
+                sqlx::query("SET statement_timeout = '15s'")
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect(&database_url)
         .await?;
 
@@ -93,6 +123,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         sealing,
         allow_loopback_destinations,
         billing: plane_billing,
+        health: std::sync::Arc::new(throttle::HealthProbe::default()),
+        admission: std::sync::Arc::new(throttle::Admission::default()),
     };
     let app = Router::new()
         .route("/healthz", routing::get(healthz))
@@ -101,6 +133,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(edge::router())
         .merge(export::router())
         .merge(billing::router())
+        .merge(tokens::router())
+        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
+        // Outermost, so it also bounds a client that is slow to send its body.
+        // Without it a trickling request holds a pool connection for as long as
+        // it likes, which is the cheapest way to exhaust the pool.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state.clone());
 
@@ -140,10 +181,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn healthz(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> Result<Json<serde_json::Value>, error::ApiError> {
-    sqlx::query_scalar::<_, i32>("SELECT 1")
+    // Cached, because the platform now polls this and the endpoint is
+    // unauthenticated: without a cache it is a `SELECT 1` and a pool connection
+    // per request, from anyone. The window is short enough that a database
+    // outage is still reported within one health-check interval.
+    if let Some(cached) = state.health.recent() {
+        return cached
+            .then(|| Json(serde_json::json!({ "status": "ok" })))
+            .ok_or(error::ApiError::Internal);
+    }
+
+    let reachable = sqlx::query_scalar::<_, i32>("SELECT 1")
         .fetch_one(&state.pool)
-        .await?;
-    Ok(Json(serde_json::json!({ "status": "ok" })))
+        .await
+        .is_ok();
+    state.health.record(reachable);
+
+    if reachable {
+        Ok(Json(serde_json::json!({ "status": "ok" })))
+    } else {
+        tracing::error!("health probe could not reach the database");
+        Err(error::ApiError::Internal)
+    }
 }
 
 async fn migrate(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
