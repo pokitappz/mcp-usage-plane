@@ -15,8 +15,8 @@ publish = false
 # crates are not enough to build a control plane, customers self-hosting the
 # free sidecar would hit the same wall.
 [dependencies]
-mcp-usage-core = "0.3.1"
-mcp-usage-export = "0.3.1"
+mcp-usage-core = "0.4.0"
+mcp-usage-export = "0.4.0"
 
 axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
 tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
