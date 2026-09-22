@@ -352,12 +352,14 @@ async fn the_quota_endpoint_reports_the_same_verdict_the_edge_would_reach() {
         )
         .await;
 
-    // Exactly at the limit is still admitting: `assess_limits` rejects only when
-    // the new total would be greater.
+    // Exactly at the limit is not admitting. `assess_limits` allows an exact
+    // boundary, so committing the tenth unit was correct - but the endpoint
+    // answers the next unit, and the eleventh is refused. See
+    // `a_customer_pinned_at_its_cap_is_reported_as_not_admitting`.
     let (status, quota) = plane.admin(Method::GET, "/v1/usage/quota", None).await;
     assert_eq!(status, 200);
     assert_eq!(quota[0]["committed_units"], 10);
-    assert_eq!(quota[0]["admitting"], true);
+    assert_eq!(quota[0]["admitting"], false);
 
     plane
         .edge(
@@ -371,6 +373,168 @@ async fn the_quota_endpoint_reports_the_same_verdict_the_edge_would_reach() {
     assert_eq!(quota[0]["committed_units"], 11);
     assert_eq!(quota[0]["admitting"], false);
     assert_eq!(quota[0]["reason"], "QuotaExceeded");
+}
+
+#[tokio::test]
+async fn a_rollup_is_bounded_and_cannot_be_asked_for_more() {
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    plane.seed_tenant("acme", "cus_acme").await;
+
+    // Six distinct buckets, one per day, so the rollup has something to clip.
+    let events: Vec<_> = (0..6)
+        .map(|day| {
+            json!({
+                "identifier": format!("agg-{day}"),
+                "customer_id": "cus_acme",
+                "meter": "mcp_units",
+                "units": 1,
+                "timestamp": 1_789_757_188u64 + day * 86_400
+            })
+        })
+        .collect();
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({ "events": events })),
+        )
+        .await;
+
+    let (status, all) = plane.admin(Method::GET, "/v1/usage", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(all.as_array().expect("rows").len(), 6);
+
+    let (status, clipped) = plane.admin(Method::GET, "/v1/usage?limit=2", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(clipped.as_array().expect("rows").len(), 2);
+
+    // Asking past the ceiling is capped, not honoured. An unbounded rollup is
+    // the one request an ordinary admin can make that takes the plane down.
+    let (status, capped) = plane
+        .admin(Method::GET, "/v1/usage?limit=4000000", None)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(capped.as_array().expect("rows").len(), 6);
+}
+
+#[tokio::test]
+async fn one_batch_prices_each_customer_with_its_own_rate() {
+    // Unit prices are now resolved for the whole batch in one query instead of
+    // one per event. A single shared price would be an easy way to get that
+    // wrong and would silently misreport every spend cap, so the batch below
+    // mixes two customers at deliberately different rates and an unknown third.
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    plane.seed_tenant("cheap", "cus_cheap").await;
+    plane.seed_tenant("dear", "cus_dear").await;
+    plane
+        .admin(
+            Method::PATCH,
+            "/v1/tenants/dear",
+            Some(json!({"unit_price_micros": 50_000})),
+        )
+        .await;
+
+    let (status, _) = plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [
+                usage_event("agg-cheap", "cus_cheap", 3),
+                usage_event("agg-dear", "cus_dear", 2),
+                // No tenant owns this one. It prices at zero rather than
+                // borrowing whatever rate happened to be fetched last.
+                usage_event("agg-unknown", "cus_ghost", 5),
+            ]})),
+        )
+        .await;
+    assert_eq!(status, 200);
+
+    let (_, quota) = plane.admin(Method::GET, "/v1/usage/quota", None).await;
+    let spend = |customer: &str| -> u64 {
+        quota
+            .as_array()
+            .expect("quota is a list")
+            .iter()
+            .find(|row| row["customer_id"] == customer)
+            .unwrap_or_else(|| panic!("no quota row for {customer}"))["committed_spend_micros"]
+            .as_u64()
+            .expect("spend is a number")
+    };
+
+    // seed_tenant sets 1_000 micros per unit.
+    assert_eq!(spend("cus_cheap"), 3 * 1_000);
+    assert_eq!(spend("cus_dear"), 2 * 50_000);
+}
+
+#[tokio::test]
+async fn a_customer_pinned_at_its_cap_is_reported_as_not_admitting() {
+    // The failure this pins is worse than an off-by-one at the boundary.
+    //
+    // A customer sitting exactly at `max_units` has every further call refused
+    // by the edge. Refused calls commit no usage, so the committed total stops
+    // moving at the cap and never passes it. If `admitting` asks "would zero
+    // more units be allowed" it answers yes, forever, for a customer whose
+    // traffic is one hundred percent blocked - and the operator's quota
+    // dashboard has no way to show the outage.
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    plane.seed_tenant("acme", "cus_acme").await;
+    plane
+        .admin(
+            Method::PATCH,
+            "/v1/tenants/acme",
+            Some(json!({"max_units": 10})),
+        )
+        .await;
+
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [usage_event("agg-1", "cus_acme", 10)]})),
+        )
+        .await;
+
+    let (status, quota) = plane.admin(Method::GET, "/v1/usage/quota", None).await;
+    assert_eq!(status, 200);
+    assert_eq!(quota[0]["committed_units"], 10);
+    assert_eq!(
+        quota[0]["admitting"], false,
+        "a customer at its cap has its next call refused, so it is not admitting"
+    );
+    assert_eq!(quota[0]["reason"], "QuotaExceeded");
+}
+
+#[tokio::test]
+async fn a_customer_under_its_cap_is_still_reported_as_admitting() {
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    plane.seed_tenant("acme", "cus_acme").await;
+    plane
+        .admin(
+            Method::PATCH,
+            "/v1/tenants/acme",
+            Some(json!({"max_units": 10})),
+        )
+        .await;
+
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [usage_event("agg-1", "cus_acme", 9)]})),
+        )
+        .await;
+
+    let (_, quota) = plane.admin(Method::GET, "/v1/usage/quota", None).await;
+    assert_eq!(quota[0]["committed_units"], 9);
+    assert_eq!(
+        quota[0]["admitting"], true,
+        "one unit of headroom is still headroom"
+    );
+    assert!(quota[0]["reason"].is_null());
 }
 
 #[tokio::test]

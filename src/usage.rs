@@ -36,7 +36,19 @@ pub struct RollupQuery {
     /// `hour`, `day` or `month`. Defaults to `day`.
     #[serde(default)]
     pub bucket: Option<String>,
+    /// Maximum rows to return. Defaults to and is capped at [`MAX_ROLLUP_ROWS`].
+    #[serde(default)]
+    pub limit: Option<u32>,
 }
+
+/// Most rows a single rollup will return.
+///
+/// The query groups by bucket, customer and meter with no natural bound: an
+/// account with a year of history, hourly buckets and a few hundred customers
+/// produces millions of rows, all of which were materialized in memory here and
+/// then serialized into one response. That is a self-inflicted outage reachable
+/// from an ordinary admin request, not an attack.
+pub const MAX_ROLLUP_ROWS: u32 = 10_000;
 
 /// One row of a rollup.
 #[derive(Debug, Serialize)]
@@ -66,7 +78,7 @@ pub struct QuotaRow {
     pub max_units: Option<u64>,
     /// Spend cap in millionths, null for unbounded.
     pub max_spend_micros: Option<u64>,
-    /// Whether another unit would currently be admitted.
+    /// Whether the next unit would currently be admitted.
     pub admitting: bool,
     /// Why not, when `admitting` is false.
     pub reason: Option<String>,
@@ -112,14 +124,22 @@ async fn rollup(
            AND ($3::timestamptz IS NULL OR event_at < $3)
            AND ($4::text IS NULL OR customer_id = $4)
          GROUP BY 1, 2, 3
-         ORDER BY 1 DESC, 2, 3"
+         ORDER BY 1 DESC, 2, 3
+         LIMIT $5"
     );
+
+    // Silently truncating would be worse than refusing: a caller cannot tell a
+    // complete answer from a clipped one, and these are billing figures. The
+    // cap is applied to whatever was asked for, and the ordering is newest
+    // first, so a clipped response is at least the most recent window.
+    let limit = params.limit.unwrap_or(MAX_ROLLUP_ROWS).min(MAX_ROLLUP_ROWS);
 
     let rows = sqlx::query(&sql)
         .bind(&caller.account_id)
         .bind(params.from)
         .bind(params.to)
         .bind(params.customer_id.as_deref())
+        .bind(i64::from(limit))
         .fetch_all(&state.pool)
         .await?;
 
@@ -145,6 +165,7 @@ async fn quota(
         "SELECT t.billing_customer_id,
                 MAX(t.max_units) AS max_units,
                 MAX(t.max_spend_micros) AS max_spend_micros,
+                COALESCE(MAX(t.unit_price_micros), 0) AS unit_price_micros,
                 COALESCE(MAX(c.units), 0) AS committed_units,
                 COALESCE(MAX(c.spend_micros), 0) AS committed_spend_micros
          FROM tenants t
@@ -166,6 +187,9 @@ async fn quota(
         let committed_spend_micros: i64 = row.try_get("committed_spend_micros")?;
         let max_units: Option<i64> = row.try_get("max_units")?;
         let max_spend_micros: Option<i64> = row.try_get("max_spend_micros")?;
+        // The same price the ingest path charges with, so the spend answer
+        // here matches what committing a unit would actually cost.
+        let unit_price_micros: i64 = row.try_get("unit_price_micros")?;
 
         let current = Usage {
             units: committed_units.unsigned_abs(),
@@ -175,9 +199,16 @@ async fn quota(
             max_units: max_units.map(i64::unsigned_abs),
             max_spend_micros: max_spend_micros.map(i64::unsigned_abs),
         };
-        // The same pure decision the edge applies, so the plane and the sidecar
-        // can never disagree about where a boundary sits.
-        let decision = assess_limits(current, 0, 0, limits);
+        // One unit, not zero, and this is the whole point of the endpoint.
+        //
+        // Asking whether zero more units fit answers yes at exactly the cap,
+        // and a capped customer's committed total stops moving there: the edge
+        // refuses its calls, and refused calls commit nothing. Zero would
+        // therefore report `admitting` forever for a customer whose traffic is
+        // entirely blocked. Asking whether the *next* unit fits is the question
+        // an operator is actually asking, and it is the same question, with the
+        // same function, that the edge answers when it admits or refuses.
+        let decision = assess_limits(current, 1, unit_price_micros.unsigned_abs(), limits);
         out.push(QuotaRow {
             customer_id: row.try_get("billing_customer_id")?,
             committed_units: current.units,

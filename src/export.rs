@@ -418,6 +418,27 @@ pub async fn drain_once(
 }
 
 /// Drain every account with a configured destination, forever.
+///
+/// # Running more than one instance
+///
+/// Nothing here takes a lock, and that is deliberate rather than an oversight.
+/// Two instances draining the same account select the same pending rows and
+/// submit them both - which is safe, because every provider this plane talks to
+/// deduplicates on the aggregate identifier: Stripe for at least 24 hours, and
+/// a webhook receiver by the contract documented on `WebhookProvider`. The same
+/// property is what lets a `RetryableFailure` be left unmarked and picked up by
+/// the next cycle.
+///
+/// So concurrency here costs duplicate provider calls, not duplicate billing,
+/// and a rolling deploy overlapping two instances is a rate-limit question
+/// rather than a correctness one.
+///
+/// Do not "fix" this with a session-scoped `pg_advisory_lock`. These
+/// connections come from a pool and are reused rather than closed, so a lock
+/// left behind by a failed drain would block that account's exports until the
+/// process restarts - trading a harmless duplicate for a silent, permanent
+/// stall. If duplicate submissions ever need eliminating, it takes a claim
+/// column with a lease, which is a migration.
 pub async fn drain_forever(state: AppState, interval: std::time::Duration) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
