@@ -130,6 +130,14 @@ pub struct BillingView {
     pub status: String,
     /// End of the current paid period.
     pub current_period_end: Option<DateTime<Utc>>,
+    /// When an invoice last failed to be paid.
+    ///
+    /// Surfaced because the subscription `status` only moves to `past_due`
+    /// after Stripe exhausts its retries: the invoice event is the earlier
+    /// signal, and the one an operator can act on.
+    pub last_payment_failure_at: Option<DateTime<Utc>>,
+    /// When an invoice was last paid.
+    pub last_payment_success_at: Option<DateTime<Utc>>,
     /// Units the plane has not yet billed this account for.
     pub unbilled_units: i64,
 }
@@ -224,7 +232,7 @@ async fn link_billing(
             "stripe_customer_id must be a Stripe customer identifier".to_owned(),
         ));
     }
-    sqlx::query(
+    let linked = sqlx::query(
         "INSERT INTO account_billing (account_id, stripe_customer_id)
          VALUES ($1, $2)
          ON CONFLICT (account_id) DO UPDATE
@@ -233,13 +241,75 @@ async fn link_billing(
     .bind(&caller.account_id)
     .bind(customer)
     .execute(&state.pool)
-    .await?;
+    .await;
+
+    if let Err(error) = linked {
+        // A partial unique index on `stripe_customer_id` is what actually
+        // isolates accounts here. Worth being precise about why: every account
+        // bills through the plane's single Stripe account, so retrieving the
+        // customer would prove it exists, not that this caller owns it. First
+        // claim wins is the guarantee, and a second claim has to be refused
+        // rather than silently pointed at someone else's invoices.
+        if is_unique_violation(&error) {
+            return Err(ApiError::Conflict(
+                "that Stripe customer is already linked to another account".to_owned(),
+            ));
+        }
+        return Err(error.into());
+    }
+
+    warn_about_unbillable_backlog(&state.pool, &caller.account_id).await?;
     view(&state.pool, &caller.account_id).await.map(Json)
+}
+
+/// Whether a database error is a unique-constraint violation.
+fn is_unique_violation(error: &sqlx::Error) -> bool {
+    matches!(
+        error,
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505")
+    )
+}
+
+/// Report usage that can never reach Stripe, at the moment it becomes relevant.
+///
+/// Stripe rejects meter events stamped more than 35 days in the past, and
+/// `bill_all` only bills linked accounts. So an account that accrues usage and
+/// links its customer late has that backlog permanently rejected - one dead
+/// letter at a time, discovered 200 rows per drain cycle, long after anything
+/// could be done.
+///
+/// Linking is the moment the operator is looking. Saying it here is the
+/// difference between a decision and an archaeology exercise.
+async fn warn_about_unbillable_backlog(pool: &PgPool, account_id: &str) -> ApiResult<()> {
+    let row = sqlx::query(
+        "SELECT COUNT(*)::bigint AS events, COALESCE(SUM(units), 0)::bigint AS units
+         FROM usage_events
+         WHERE account_id = $1
+           AND plane_billed_at IS NULL
+           AND event_at < NOW() - INTERVAL '35 days'",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+
+    let events: i64 = row.try_get("events")?;
+    if events > 0 {
+        let units: i64 = row.try_get("units")?;
+        tracing::error!(
+            account_id,
+            events,
+            units,
+            "usage predates Stripe's 35 day meter-event window and cannot be \
+             billed upstream; it will dead-letter on the next drain"
+        );
+    }
+    Ok(())
 }
 
 async fn view(pool: &PgPool, account_id: &str) -> ApiResult<BillingView> {
     let row = sqlx::query(
-        "SELECT stripe_customer_id, stripe_subscription_id, status, current_period_end
+        "SELECT stripe_customer_id, stripe_subscription_id, status, current_period_end,
+                last_payment_failure_at, last_payment_success_at
          FROM account_billing WHERE account_id = $1",
     )
     .bind(account_id)
@@ -260,6 +330,8 @@ async fn view(pool: &PgPool, account_id: &str) -> ApiResult<BillingView> {
             stripe_subscription_id: row.try_get("stripe_subscription_id")?,
             status: row.try_get("status")?,
             current_period_end: row.try_get("current_period_end")?,
+            last_payment_failure_at: row.try_get("last_payment_failure_at")?,
+            last_payment_success_at: row.try_get("last_payment_success_at")?,
             unbilled_units,
         },
         None => BillingView {
@@ -267,6 +339,8 @@ async fn view(pool: &PgPool, account_id: &str) -> ApiResult<BillingView> {
             stripe_subscription_id: None,
             status: "none".to_owned(),
             current_period_end: None,
+            last_payment_failure_at: None,
+            last_payment_success_at: None,
             unbilled_units,
         },
     })
@@ -383,25 +457,34 @@ async fn stripe_webhook(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    // Stripe redelivers, so the event id is the idempotency key. Claiming it
-    // first means a redelivery is a no-op rather than a second application.
+    // Stripe redelivers, so the event id is the idempotency key. Claim and
+    // apply in ONE transaction: claiming on the pool and applying separately
+    // meant a transient database error left the event claimed but unapplied,
+    // and Stripe's redelivery then answered `duplicate` without ever applying
+    // it. That drops a subscription state change permanently.
+    let mut tx = state.pool.begin().await?;
     let claimed = sqlx::query(
         "INSERT INTO stripe_webhook_events (event_id, event_type) VALUES ($1, $2)
          ON CONFLICT (event_id) DO NOTHING",
     )
     .bind(event_id)
     .bind(event_type)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     if claimed.rows_affected() == 0 {
         return Ok(Json(serde_json::json!({ "status": "duplicate" })));
     }
 
-    apply_event(&state.pool, event_type, &event).await?;
+    apply_event(&mut tx, event_type, &event).await?;
+    tx.commit().await?;
     Ok(Json(serde_json::json!({ "status": "ok" })))
 }
 
-async fn apply_event(pool: &PgPool, event_type: &str, event: &serde_json::Value) -> ApiResult<()> {
+async fn apply_event(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event_type: &str,
+    event: &serde_json::Value,
+) -> ApiResult<()> {
     let object = event
         .pointer("/data/object")
         .ok_or_else(|| ApiError::BadRequest("missing data.object".into()))?;
@@ -430,10 +513,7 @@ async fn apply_event(pool: &PgPool, event_type: &str, event: &serde_json::Value)
             } else {
                 "past_due"
             };
-            let period_end = object
-                .get("current_period_end")
-                .and_then(serde_json::Value::as_i64)
-                .and_then(|seconds| Utc.timestamp_opt(seconds, 0).single());
+            let period_end = subscription_period_end(object);
 
             let updated = sqlx::query(
                 "UPDATE account_billing
@@ -447,7 +527,7 @@ async fn apply_event(pool: &PgPool, event_type: &str, event: &serde_json::Value)
             .bind(subscription)
             .bind(status)
             .bind(period_end)
-            .execute(pool)
+            .execute(&mut **tx)
             .await?;
 
             if updated.rows_affected() == 0 {
@@ -458,9 +538,73 @@ async fn apply_event(pool: &PgPool, event_type: &str, event: &serde_json::Value)
                 tracing::info!(event_type, status, "applied a subscription event");
             }
         }
+        // A failed payment used to reach a debug log and vanish. Stripe moves
+        // the subscription to `past_due` eventually, but the invoice event is
+        // the first signal and the only one that says which invoice.
+        "invoice.payment_failed" | "invoice.payment_action_required" => {
+            let Some(customer) = object.get("customer").and_then(serde_json::Value::as_str) else {
+                return Ok(());
+            };
+            let updated = sqlx::query(
+                "UPDATE account_billing
+                 SET last_payment_failure_at = NOW(), updated_at = NOW()
+                 WHERE stripe_customer_id = $1",
+            )
+            .bind(customer)
+            .execute(&mut **tx)
+            .await?;
+            if updated.rows_affected() == 0 {
+                tracing::info!(event_type, "payment event for an unlinked customer");
+            } else {
+                // Error, not warn: this is revenue not arriving, and it is the
+                // signal an operator should be paged on.
+                tracing::error!(event_type, "an account's payment did not succeed");
+            }
+        }
+        "invoice.paid" | "invoice.payment_succeeded" => {
+            let Some(customer) = object.get("customer").and_then(serde_json::Value::as_str) else {
+                return Ok(());
+            };
+            sqlx::query(
+                "UPDATE account_billing
+                 SET last_payment_success_at = NOW(), updated_at = NOW()
+                 WHERE stripe_customer_id = $1",
+            )
+            .bind(customer)
+            .execute(&mut **tx)
+            .await?;
+            tracing::info!(event_type, "recorded a successful payment");
+        }
         other => tracing::debug!(event_type = other, "ignoring an unhandled Stripe event"),
     }
     Ok(())
+}
+
+/// The end of the current billing period, read from the subscription's items.
+///
+/// Stripe moved `current_period_end` off the Subscription object and onto each
+/// subscription item. Reading it from the top level, which is what this did,
+/// resolves to `None` on every delivery - and the `COALESCE` in the UPDATE then
+/// swallows that silently, so the column stayed NULL forever.
+///
+/// Verified against <https://docs.stripe.com/api/subscriptions/object>: the
+/// attribute list has no top-level `current_period_end`, and the example
+/// payload carries it at `items.data[].current_period_end`.
+///
+/// The maximum across items is the period end for the subscription as a whole:
+/// items can be billed on different anchors, and the subscription is not done
+/// with a period until its last item is.
+fn subscription_period_end(object: &serde_json::Value) -> Option<DateTime<Utc>> {
+    let seconds = object
+        .pointer("/items/data")
+        .and_then(serde_json::Value::as_array)?
+        .iter()
+        .filter_map(|item| {
+            item.get("current_period_end")
+                .and_then(serde_json::Value::as_i64)
+        })
+        .max()?;
+    Utc.timestamp_opt(seconds, 0).single()
 }
 
 // ----------------------------------------------------------- upstream bill

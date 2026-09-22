@@ -526,13 +526,22 @@ async fn a_signed_subscription_event_updates_billing_and_replays_are_ignored() {
         )
         .await;
 
+    // The period end lives on the subscription's ITEMS, not on the
+    // subscription. This payload previously put it at the top level and never
+    // asserted it landed, which is exactly why reading it from the wrong place
+    // went unnoticed. The older `.dahlia` date is deliberate: only the release
+    // suffix is checked, so a monthly version stays acceptable.
     let body = json!({
         "id": "evt_1",
         "type": "customer.subscription.updated",
         "api_version": "2026-07-29.dahlia",
         "data": {"object": {
             "id": "sub_1", "customer": "cus_theaccount",
-            "status": "active", "current_period_end": 1_900_000_000u64
+            "status": "active",
+            "items": {"object": "list", "data": [
+                {"id": "si_1", "current_period_end": 1_900_000_000u64},
+                {"id": "si_2", "current_period_end": 1_800_000_000u64}
+            ]}
         }}
     })
     .to_string();
@@ -549,6 +558,16 @@ async fn a_signed_subscription_event_updates_billing_and_replays_are_ignored() {
     let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
     assert_eq!(view["status"], "active");
     assert_eq!(view["stripe_subscription_id"], "sub_1");
+    // The latest item's period end wins: items can bill on different anchors,
+    // and the subscription is not done with a period until its last item is.
+    assert!(
+        view["current_period_end"]
+            .as_str()
+            .expect("current_period_end must be populated, not silently NULL")
+            .starts_with("2030-"),
+        "got {}",
+        view["current_period_end"]
+    );
 
     // Stripe redelivers, so the event id is the idempotency key.
     let (status, ack) = post_webhook(&plane, &body, &signature).await;
@@ -609,4 +628,183 @@ async fn an_event_from_an_unexpected_api_release_is_refused() {
 
     let (status, _) = post_webhook(&plane, &body, &signature).await;
     assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn one_stripe_customer_cannot_be_claimed_by_two_accounts() {
+    // The subscription webhook updates by customer id:
+    //
+    //     UPDATE account_billing ... WHERE stripe_customer_id = $1
+    //
+    // With two accounts naming the same customer that touches both rows, and
+    // upstream billing invoices one party for the other's usage.
+    let db = require_db!();
+    let plane = Plane::start_with_env(&db, &[("PLANE_SIGNUP_SECRET", "signup-secret")]).await;
+
+    let (status, _) = plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_contested"})),
+        )
+        .await;
+    assert_eq!(status, 200, "the first claim is allowed");
+
+    // A second account, created through signup so it has its own admin token.
+    let (status, created) = plane
+        .send(
+            Method::POST,
+            "/v1/signup",
+            Some(json!({"name": "second", "signup_secret": "signup-secret"})),
+            None,
+        )
+        .await;
+    assert_eq!(status, 200, "{created}");
+    let other_admin = created["admin_token"].as_str().expect("an admin token");
+
+    let response = plane
+        .http
+        .put(plane.url("/v1/billing"))
+        .bearer_auth(other_admin)
+        .json(&json!({"stripe_customer_id": "cus_contested"}))
+        .send()
+        .await
+        .expect("request reaches the plane");
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::CONFLICT,
+        "a second account must not be able to claim a linked customer"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_payment_is_recorded_rather_than_ignored() {
+    // It used to reach a debug log and vanish. The invoice event is the first
+    // signal that revenue is not arriving, and the only one naming the invoice.
+    let db = require_db!();
+    let plane = Plane::start_with_env(
+        &db,
+        &[("PLANE_STRIPE_WEBHOOK_SECRET", common::WEBHOOK_SECRET)],
+    )
+    .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_payer"})),
+        )
+        .await;
+
+    let body = json!({
+        "id": "evt_failed_1",
+        "type": "invoice.payment_failed",
+        "api_version": "2026-08-26.dahlia",
+        "data": {"object": {"id": "in_1", "customer": "cus_payer"}}
+    })
+    .to_string();
+    let signature = stripe_signature(
+        common::WEBHOOK_SECRET,
+        chrono::Utc::now().timestamp(),
+        &body,
+    );
+    let (status, ack) = post_webhook(&plane, &body, &signature).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        ack["status"], "ok",
+        "the event must be handled, not ignored"
+    );
+
+    let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
+    assert!(
+        view["last_payment_failure_at"].is_string(),
+        "a failed payment must leave a trace: {view}"
+    );
+    assert!(view["last_payment_success_at"].is_null());
+
+    // And a later success is recorded separately, so the two are not confused.
+    let body = json!({
+        "id": "evt_paid_1",
+        "type": "invoice.paid",
+        "api_version": "2026-08-26.dahlia",
+        "data": {"object": {"id": "in_2", "customer": "cus_payer"}}
+    })
+    .to_string();
+    let signature = stripe_signature(
+        common::WEBHOOK_SECRET,
+        chrono::Utc::now().timestamp(),
+        &body,
+    );
+    post_webhook(&plane, &body, &signature).await;
+
+    let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
+    assert!(view["last_payment_success_at"].is_string(), "{view}");
+    assert!(
+        view["last_payment_failure_at"].is_string(),
+        "the earlier failure must not be erased by a later success"
+    );
+}
+
+#[tokio::test]
+async fn a_webhook_that_cannot_be_applied_is_not_left_claimed() {
+    // Claiming the event id on the pool and applying separately meant a
+    // transient database error left the event claimed but unapplied, and
+    // Stripe's redelivery answered `duplicate` without ever applying it - a
+    // subscription state change dropped permanently.
+    //
+    // `data.object` missing makes `apply_event` error, which is the cheapest
+    // reachable stand-in for that failure.
+    let db = require_db!();
+    let plane = Plane::start_with_env(
+        &db,
+        &[("PLANE_STRIPE_WEBHOOK_SECRET", common::WEBHOOK_SECRET)],
+    )
+    .await;
+
+    let broken = json!({
+        "id": "evt_broken_1",
+        "type": "customer.subscription.updated",
+        "api_version": "2026-08-26.dahlia",
+        "data": {}
+    })
+    .to_string();
+    let signature = stripe_signature(
+        common::WEBHOOK_SECRET,
+        chrono::Utc::now().timestamp(),
+        &broken,
+    );
+    let (status, _) = post_webhook(&plane, &broken, &signature).await;
+    assert_eq!(status, 400, "an unapplicable event must not be accepted");
+
+    // Stripe redelivers. The same id must get a real attempt, not `duplicate`.
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_retry"})),
+        )
+        .await;
+    let good = json!({
+        "id": "evt_broken_1",
+        "type": "customer.subscription.updated",
+        "api_version": "2026-08-26.dahlia",
+        "data": {"object": {
+            "id": "sub_retry", "customer": "cus_retry", "status": "active",
+            "items": {"data": [{"current_period_end": 1_900_000_000u64}]}
+        }}
+    })
+    .to_string();
+    let signature = stripe_signature(
+        common::WEBHOOK_SECRET,
+        chrono::Utc::now().timestamp(),
+        &good,
+    );
+    let (status, ack) = post_webhook(&plane, &good, &signature).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        ack["status"], "ok",
+        "a redelivery after a failed apply must be applied, not dismissed"
+    );
+
+    let (_, view) = plane.admin(Method::GET, "/v1/billing", None).await;
+    assert_eq!(view["status"], "active");
 }
