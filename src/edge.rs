@@ -5,6 +5,8 @@
 //! "pull a whole snapshot" and "post an idempotent batch", with no session, no
 //! cursor and no ordering requirement between the two.
 
+use std::collections::{BTreeSet, HashMap};
+
 use axum::extract::State;
 use axum::{Json, Router, routing};
 use chrono::{DateTime, TimeZone, Utc};
@@ -193,6 +195,51 @@ fn validate(event: &UsageIn) -> Result<(i64, DateTime<Utc>), &'static str> {
     Ok((units, event_at))
 }
 
+/// Resolve the unit price for every billing customer named in a batch.
+///
+/// One query, not one per event. This was a `SELECT MAX(unit_price_micros)`
+/// inside the loop and inside the transaction: up to `MAX_BATCH` extra round
+/// trips on the one path every sidecar uses, each holding the write locks open
+/// a little longer. A batch names a handful of distinct customers at most.
+///
+/// Tenants that share a billing customer share a quota pool, and where they
+/// disagree on unit price the highest applies, because over-stating spend is
+/// the safe direction for a spend cap. A customer with no tenant row is absent
+/// from the map and prices at zero, exactly as the per-event `COALESCE` did.
+async fn unit_prices_for(
+    state: &AppState,
+    account_id: &str,
+    batch: &UsageBatch,
+) -> Result<HashMap<String, i64>, ApiError> {
+    let customers: Vec<String> = batch
+        .events
+        .iter()
+        .map(|event| event.customer_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let rows = sqlx::query(
+        "SELECT billing_customer_id, COALESCE(MAX(unit_price_micros), 0) AS unit_price_micros
+         FROM tenants
+         WHERE account_id = $1 AND billing_customer_id = ANY($2)
+         GROUP BY billing_customer_id",
+    )
+    .bind(account_id)
+    .bind(&customers)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut prices = HashMap::with_capacity(rows.len());
+    for row in rows {
+        prices.insert(
+            row.try_get("billing_customer_id")?,
+            row.try_get("unit_price_micros")?,
+        );
+    }
+    Ok(prices)
+}
+
 async fn ingest(
     State(state): State<AppState>,
     EdgeCaller(caller): EdgeCaller,
@@ -211,6 +258,8 @@ async fn ingest(
     for event in &batch.events {
         prepared.push(validate(event));
     }
+
+    let unit_prices = unit_prices_for(&state, &caller.account_id, &batch).await?;
 
     let mut tx = state.pool.begin().await?;
     let mut outcomes = Vec::with_capacity(batch.events.len());
@@ -248,18 +297,10 @@ async fn ingest(
         .await?;
 
         if inserted.is_some() {
-            // Tenants that share a billing customer share a quota pool. Where
-            // they disagree on unit price the highest one applies, because
-            // over-stating spend is the safe direction for a spend cap.
-            let unit_price: i64 = sqlx::query_scalar(
-                "SELECT COALESCE(MAX(unit_price_micros), 0) FROM tenants
-                 WHERE account_id = $1 AND billing_customer_id = $2",
-            )
-            .bind(&caller.account_id)
-            .bind(&event.customer_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
+            let unit_price = unit_prices
+                .get(&event.customer_id)
+                .copied()
+                .unwrap_or_default();
             let spend = units.saturating_mul(unit_price);
             sqlx::query(
                 "INSERT INTO usage_counters

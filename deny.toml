@@ -1,0 +1,73 @@
+# cargo-deny configuration.
+#
+# `cargo audit` covers RustSec advisories. This file covers what it does not:
+# license compliance, where crates are allowed to come from, and structural
+# hygiene of the dependency graph. It matters more here than in the open-source
+# crates, because this is the proprietary half - a copyleft dependency reaching
+# this tree is a licensing problem, not a note in a NOTICE file.
+#
+# Every list below was derived from an actual run over this lockfile, not copied
+# from the sibling repository. Re-derive rather than guess when adding a
+# dependency:
+#
+#   cargo deny --all-features list
+#   cargo deny --all-features check
+
+[graph]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+# A yanked crate is a supply-chain signal in its own right, so it fails here
+# even when no advisory has been filed against it. Both of this tree's known
+# offenders - rustls below 0.23.45 and chacha20 0.10.1 - were caught this way.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# The complete set required to satisfy every SPDX expression in the tree.
+#
+# Note what is NOT here: `LGPL-2.1-or-later` appears in a `cargo deny list` of
+# this tree, via `r-efi`, and looks alarming for a proprietary service. It is a
+# disjunction - `MIT OR Apache-2.0 OR LGPL-2.1-or-later` - so MIT satisfies it
+# and no copyleft obligation attaches. Leaving LGPL out of this list is
+# deliberate: if a dependency ever arrives offering copyleft as the *only*
+# option, this check has to fail rather than wave it through.
+allow = [
+    "Apache-2.0",          # the bulk of the tree
+    "MIT",                 # the bulk of the tree
+    "ISC",                 # rustls, rustls-webpki, ring, untrusted, hyper-rustls
+    "BSD-3-Clause",        # matchit, subtle
+    "BSD-2-Clause",        # zerocopy
+    "BSL-1.0",             # ryu, wasite, whoami
+    "CDLA-Permissive-2.0", # webpki-roots
+    "Unicode-3.0",         # the icu_* family, reached through idna/url
+    "Zlib",                # foldhash, tinyvec
+    "Unlicense",           # byteorder, memchr, each offered alongside MIT
+]
+confidence-threshold = 0.93
+exceptions = []
+
+# `mcp-usage-plane` and `plane-sqlx-postgres` carry no `license` field, which is
+# correct for `publish = false` crates in a proprietary product and reports as
+# "Unlicensed". Ignoring them here is narrower than inventing a license string
+# that would then have to be kept true.
+[licenses.private]
+ignore = true
+
+[bans]
+# A warning rather than an error: the resolved graph carries duplicated crates
+# it does not control, mostly the windows-sys/windows-targets target shims and
+# the getrandom/rand_core/hashbrown families. Failing the build on those would
+# only get this check switched off. Tighten once they resolve upstream.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# Everything must come from crates.io. A git or vendored source appearing here
+# would mean a dependency was redirected somewhere unreviewed - and this tree
+# handles customer billing credentials.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

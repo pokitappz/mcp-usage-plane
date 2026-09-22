@@ -80,10 +80,25 @@ async fn create_scratch_database(base_url: &str, port: u16) -> String {
 }
 
 /// The scratch database URL, or `None` when the suite should skip.
+///
+/// # Panics
+///
+/// Panics when `PLANE_REQUIRE_DATABASE` is set and no database URL is
+/// available. Without that, a CI service container that failed to start looks
+/// exactly like a passing run: every database-backed test skips itself, the
+/// job goes green, and nothing was actually exercised. Anywhere the database
+/// is meant to be present, set the variable and let a missing one fail loudly.
+#[must_use]
 pub fn database_url() -> Option<String> {
-    std::env::var("TEST_DATABASE_URL")
+    let url = std::env::var("TEST_DATABASE_URL")
         .ok()
-        .filter(|value| !value.trim().is_empty())
+        .filter(|value| !value.trim().is_empty());
+    assert!(
+        !(url.is_none() && std::env::var("PLANE_REQUIRE_DATABASE").is_ok()),
+        "PLANE_REQUIRE_DATABASE is set but TEST_DATABASE_URL is missing or empty; \
+         the database-backed tests would have silently skipped"
+    );
+    url
 }
 
 #[macro_export]

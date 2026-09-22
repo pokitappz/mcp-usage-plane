@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Advisories are published against code that is already merged, so waiting for
+  # the next push means a known-vulnerable dependency sits undetected until
+  # someone happens to commit. This tree handles customer billing credentials.
+  schedule:
+    - cron: "41 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  # The event name keeps the nightly advisory run from cancelling, or being
+  # cancelled by, ordinary branch CI.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Format, lint, test, and document
+    runs-on: ubuntu-latest
+    services:
+      # Every meaningful test in this repository needs a database: the plane is
+      # a control plane, and a suite that skips its Postgres tests is a suite
+      # that proves nothing. Pinned by digest as well as version, so a backend
+      # upgrade is a reviewed change rather than a surprise.
+      postgres:
+        image: postgres:17.2@sha256:3267c505060a0052e5aa6e5175a7b41ab6b04da2f8c4540fc6e98a37210aa2d3
+        env:
+          POSTGRES_USER: plane
+          POSTGRES_PASSWORD: plane
+          POSTGRES_DB: plane
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U plane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+      - name: Check formatting
+        run: cargo +stable fmt --all -- --check
+      - name: Lint all targets and features
+        run: cargo +stable clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test all targets and features
+        env:
+          TEST_DATABASE_URL: postgres://plane:plane@127.0.0.1:5432/plane
+          # Without this a broken service container would look exactly like a
+          # passing run, because the database tests skip themselves when no
+          # database is reachable.
+          PLANE_REQUIRE_DATABASE: "1"
+        run: cargo +stable test --workspace --all-targets --all-features --locked
+      - name: Treat documentation warnings as errors
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo +stable doc --workspace --all-features --no-deps --locked
+
+  msrv:
+    name: Rust 1.88 minimum version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the declared minimum Rust
+        run: rustup toolchain install 1.88.0 --profile minimal
+      - name: Check every crate
+        run: cargo +1.88.0 check --workspace --all-targets --all-features --locked
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install cargo-audit
+        run: cargo +stable install cargo-audit --locked --version 0.22.2
+      - name: Check RustSec advisories
+        run: cargo +stable audit
+
+  deny:
+    name: License, source, and ban checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install cargo-deny
+        run: cargo +stable install cargo-deny --locked --version 0.20.2
+      - name: Check licenses, sources, and bans
+        run: cargo +stable deny --all-features check
+
+  image:
+    name: Container image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The deployed artifact is the image, not `cargo build`. A Dockerfile that
+      # stopped building would otherwise be discovered at deploy time.
+      - name: Build the deployment image
+        run: docker build --tag mcp-usage-plane:ci .
