@@ -14,6 +14,7 @@ mod billing;
 mod edge;
 mod error;
 mod export;
+mod pricing;
 mod providers;
 mod secret;
 mod tenants;
@@ -134,6 +135,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(export::router())
         .merge(billing::router())
         .merge(tokens::router())
+        .merge(pricing::router())
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         // Outermost, so it also bounds a client that is slow to send its body.
         // Without it a trickling request holds a pool connection for as long as
@@ -152,7 +154,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(30),
     );
     let drain = tokio::spawn(export::drain_forever(state.clone(), drain_interval));
-    let biller = tokio::spawn(billing::bill_forever(state.clone(), drain_interval));
+    // The period close replaces the old per-unit upstream drip. Running both
+    // would charge every account twice: once per processed unit and again for
+    // the period those units are in.
+    let biller = tokio::spawn(pricing::close_forever(state.clone(), drain_interval));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;

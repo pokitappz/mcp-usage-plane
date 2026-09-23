@@ -57,6 +57,9 @@ prices.
 | `GET /v1/export/destination` | admin | Destination, pending count, dead letters |
 | `GET /v1/export/dead-letters` | admin | Aggregates awaiting reconciliation |
 | `POST /v1/export/dead-letters/{id}/resolve` | admin | Mark one reconciled |
+| `GET /v1/pricing` | admin | The account's terms |
+| `PUT /v1/pricing` | admin | Set rate, floor and when the terms apply |
+| `GET /v1/pricing/invoices` | admin | Closed periods and what each was charged |
 | `GET /v1/billing` | admin | Subscription status and unbilled units |
 | `PUT /v1/billing` | admin | Link the account to a Stripe customer |
 | `POST /v1/signup` | none | Self-serve signup, gated by a shared secret |
@@ -148,6 +151,44 @@ This drives `MeterEventProvider` directly rather than going through
 partial retry progress and a bounded dead letter queue in memory; the plane has
 a database, and a second weaker copy of that state would only add something to
 disagree with the ledger and die with the process.
+
+## What the plane charges
+
+`max(floor_micros, revenue_micros * rate_bps / 10_000)` per account per calendar
+month, where `revenue_micros` is the account's **own** metered revenue - the sum
+of what it charged its customers, which the plane already computes into
+`usage_counters.spend_micros` for spend caps.
+
+Everything is integer arithmetic in millionths, via `i128` for the multiply.
+This multiplies money, and a rounding nobody can reproduce from an invoice is a
+support ticket. The charge is converted to whole cents, rounded half up, only at
+the moment it is handed to Stripe, because meter values are integers.
+
+**This used to be a drip and is now a close.** Upstream billing forwarded one
+meter event per processed unit, 1:1, continuously, with the actual rate living
+in a Stripe dashboard object. That shape cannot express a minimum, because a
+floor is a property of a period and a drip has no periods. The event ledger in
+`usage_events` is unchanged and is still the audit trail; what became
+period-grained is the charge.
+
+Three properties worth knowing:
+
+- **Only finished months are charged.** The current month is still accruing, and
+  invoicing it would bill a partial period.
+- **Terms have a `starts_at`, defaulting to now.** The close walks back several
+  finished periods, so without this, agreeing terms today would invoice an
+  account a floor for each of the months before it had any. Backdating is
+  explicit and supported, because onboarding mid-month and migrating an existing
+  customer both need it.
+- **A period is charged once.** `plane_invoices` is keyed on
+  `(account_id, period_start)` and carries the identifier the provider
+  deduplicates on. A period that already has a row is never recomputed, so
+  changing an account's rate cannot restate what it was already charged.
+
+The model depends on a customer's `unit_price_micros` being truthful, because
+that declared price is what the percentage is taken of. That is a commercial
+property of charging a percentage of someone's revenue, not something this code
+can enforce.
 
 ## Stripe
 
