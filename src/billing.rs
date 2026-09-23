@@ -1,4 +1,4 @@
-//! The plane's own revenue: signup, subscription state, and billing accounts
+//! The plane's own revenue: subscription state and billing accounts
 //! for the usage they put through.
 //!
 //! This is the *upstream* direction and is deliberately kept apart from the
@@ -19,7 +19,7 @@ use sha2::Sha256;
 use sqlx::{PgPool, Row as _};
 
 use crate::AppState;
-use crate::auth::{AdminCaller, hash_token, mint_token};
+use crate::auth::AdminCaller;
 use crate::error::{ApiError, ApiResult};
 use crate::export::Destination;
 use crate::providers::stripe_version_is_current;
@@ -43,8 +43,11 @@ pub struct PlaneBilling {
     pub stripe_endpoint: Option<String>,
     /// Secret for verifying inbound Stripe webhooks.
     pub webhook_secret: Option<String>,
-    /// Shared secret a signup request must present.
-    pub signup_secret: Option<String>,
+    /// Shared secret an operator must present to provision an account.
+    ///
+    /// Not a signup secret. Nothing self-serve reaches this service; see
+    /// [`crate::accounts`].
+    pub provision_secret: Option<String>,
 }
 
 impl std::fmt::Debug for PlaneBilling {
@@ -59,7 +62,7 @@ impl std::fmt::Debug for PlaneBilling {
                 "webhook_secret",
                 &self.webhook_secret.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("signup_enabled", &self.signup_secret.is_some())
+            .field("provisioning_enabled", &self.provision_secret.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -79,7 +82,7 @@ impl PlaneBilling {
             meter_name: read("PLANE_STRIPE_METER_NAME"),
             stripe_endpoint: read("PLANE_STRIPE_ENDPOINT"),
             webhook_secret: read("PLANE_STRIPE_WEBHOOK_SECRET"),
-            signup_secret: read("PLANE_SIGNUP_SECRET"),
+            provision_secret: read("PLANE_PROVISION_SECRET"),
         }
     }
 
@@ -95,28 +98,6 @@ impl PlaneBilling {
             None => Destination::None,
         }
     }
-}
-
-// ------------------------------------------------------------------ signup
-
-/// Body for a self-serve signup.
-#[derive(Debug, Deserialize)]
-pub struct Signup {
-    /// Display name for the new account.
-    pub name: String,
-    /// The shared secret that gates signup.
-    pub signup_secret: String,
-}
-
-/// A new account and its credentials. Both tokens appear exactly once, here.
-#[derive(Debug, Serialize)]
-pub struct SignupResult {
-    /// The new account identifier.
-    pub account_id: String,
-    /// Manages tenants, prices and export configuration.
-    pub admin_token: String,
-    /// Handed to a sidecar. Cannot reach pricing.
-    pub edge_token: String,
 }
 
 /// Billing state as the admin API reports it.
@@ -152,66 +133,11 @@ pub struct LinkBilling {
 /// Billing routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/v1/signup", routing::post(signup))
         .route(
             "/v1/billing",
             routing::get(billing_status).put(link_billing),
         )
         .route("/v1/stripe/webhook", routing::post(stripe_webhook))
-}
-
-async fn signup(
-    State(state): State<AppState>,
-    Json(body): Json<Signup>,
-) -> ApiResult<Json<SignupResult>> {
-    // Signup is off unless a secret is configured, so a fresh deployment is not
-    // an open account factory.
-    let Some(expected) = state.billing.signup_secret.as_deref() else {
-        return Err(ApiError::NotFound);
-    };
-    if !constant_time_eq(expected.as_bytes(), body.signup_secret.as_bytes()) {
-        return Err(ApiError::Unauthorized);
-    }
-    let name = body.name.trim();
-    if name.is_empty() || name.len() > 200 {
-        return Err(ApiError::BadRequest(
-            "name must be between 1 and 200 characters".to_owned(),
-        ));
-    }
-
-    let account_id = mint_token("acct").replace('_', "");
-    let admin_token = mint_token("mup_admin");
-    let edge_token = mint_token("mup_edge");
-
-    let mut tx = state.pool.begin().await?;
-    sqlx::query("INSERT INTO accounts (id, name) VALUES ($1, $2)")
-        .bind(&account_id)
-        .bind(name)
-        .execute(&mut *tx)
-        .await?;
-    for (token, scope) in [(&admin_token, "admin"), (&edge_token, "edge")] {
-        sqlx::query(
-            "INSERT INTO account_tokens (token_sha256, account_id, scope, label)
-             VALUES ($1, $2, $3, 'signup')",
-        )
-        .bind(hash_token(token))
-        .bind(&account_id)
-        .bind(scope)
-        .execute(&mut *tx)
-        .await?;
-    }
-    sqlx::query("INSERT INTO account_billing (account_id) VALUES ($1)")
-        .bind(&account_id)
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
-
-    tracing::info!(account_id, "account created through self-serve signup");
-    Ok(Json(SignupResult {
-        account_id,
-        admin_token,
-        edge_token,
-    }))
 }
 
 async fn billing_status(
@@ -388,7 +314,12 @@ fn expected_signature(secret: &str, timestamp: i64, body: &[u8]) -> String {
 }
 
 /// Compare without leaking how much of the value matched.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+/// Compare two secrets without leaking where they diverge.
+///
+/// Shared rather than duplicated: the webhook signature and the provisioning
+/// secret both need it, and two copies of a comparison like this can drift
+/// into one of them being subtly wrong.
+pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }

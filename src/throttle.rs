@@ -37,12 +37,28 @@ pub const RATE_BURST: u32 = 240;
 /// The window a burst is measured over.
 pub const RATE_WINDOW: Duration = Duration::from_secs(60);
 
-/// Failed authentications one client may make per [`RATE_WINDOW`].
+/// Failed authentications allowed per [`RATE_WINDOW`], across the process.
 ///
-/// Tighter than the success budget and counted separately. Tokens carry 256
-/// bits of entropy so guessing is not the threat; the cost of a failure is,
-/// because a failure always reaches the database - there is nothing to cache.
-pub const FAILURE_BURST: u32 = 20;
+/// Counted separately from success and, importantly, **globally** rather than
+/// per credential. A budget keyed on the presented token gives every distinct
+/// bad token its own fresh allowance, which bounds a client repeating one wrong
+/// token and does nothing at all about a client working through a list. Since a
+/// failure always reaches the database - there is nothing to cache - that list
+/// is unlimited database load.
+///
+/// Generous, because legitimate failure exists: a sidecar still holding a
+/// revoked key fails on every poll, and those should not exhaust the budget for
+/// everyone. It bounds an attacker to this many queries a minute rather than to
+/// none.
+///
+/// A global budget cannot be used to deny service to a *successful* caller:
+/// success takes a different budget, and a cached success never reaches here.
+pub const FAILURE_BURST: u32 = 120;
+
+/// The key every failure is counted against.
+///
+/// Fixed on purpose. See [`FAILURE_BURST`].
+const FAILURE_SUBJECT: &str = "any";
 
 /// Most distinct keys tracked at once, for both maps.
 ///
@@ -120,15 +136,19 @@ impl Admission {
     }
 
     /// Take one unit of the failed-authentication budget.
-    pub fn take_failure(&self, fingerprint: &str) -> bool {
-        take(&self.failures, fingerprint, FAILURE_BURST)
+    ///
+    /// Takes no subject: the budget is process-wide, because a per-credential
+    /// one is not a bound on guessing.
+    pub fn take_failure(&self) -> bool {
+        take(&self.failures, FAILURE_SUBJECT, FAILURE_BURST)
     }
 
     /// Take one unit of a named budget.
     ///
     /// For routes that have no bearer extractor and therefore never reach
     /// [`Self::take_request`]. That gap is not hypothetical: it is why
-    /// `POST /v1/signup` is unbounded. The name is part of the key, so two
+    /// `POST /v1/accounts` would otherwise be unbounded. The name is part of
+    /// the key, so two
     /// callers of this method cannot spend each other's allowance.
     pub fn take_named(&self, budget: &str, subject: &str, burst: u32) -> bool {
         take(&self.named, &format!("{budget}:{subject}"), burst)
@@ -309,14 +329,33 @@ mod tests {
     }
 
     #[test]
-    fn the_failure_budget_is_tighter_than_the_request_budget() {
+    fn the_failure_budget_is_global_so_guessing_is_actually_bounded() {
+        // A budget keyed on the presented credential gives every distinct guess
+        // its own allowance, which bounds a client repeating one wrong token
+        // and does nothing about a client working through a list. Since every
+        // failure reaches the database, that list is unlimited load.
         let admission = Admission::default();
         for _ in 0..FAILURE_BURST {
-            assert!(admission.take_failure("client"));
+            assert!(admission.take_failure());
         }
-        assert!(!admission.take_failure("client"));
-        // The two budgets are independent: spending one must not spend the other.
-        assert!(admission.take_request("client"));
+        assert!(!admission.take_failure(), "the budget must be a bound");
+
+        // The two budgets are independent: spending one must not spend the
+        // other, so an attacker cannot deny service to a successful caller.
+        assert!(admission.take_request("a-valid-token"));
+    }
+
+    #[test]
+    fn a_named_budget_is_shared_by_everything_using_that_name() {
+        // What makes a fixed subject a real bound: the caller chooses the key,
+        // so an operator route can count every attempt against one.
+        let admission = Admission::default();
+        for _ in 0..5 {
+            assert!(admission.take_named("provision", "any", 5));
+        }
+        assert!(!admission.take_named("provision", "any", 5));
+        // A different name is a different budget.
+        assert!(admission.take_named("other", "any", 5));
     }
 
     #[test]
@@ -335,7 +374,7 @@ mod tests {
         // supply of distinct bad tokens is an allocation attack.
         let admission = Admission::default();
         for attempt in 0..(MAX_TRACKED + 500) {
-            admission.take_failure(&format!("token-{attempt}"));
+            admission.take_named("failures", &format!("token-{attempt}"), 1);
         }
         let (_, _, failures) = admission.tracked();
         assert!(failures <= MAX_TRACKED, "tracked {failures} keys");

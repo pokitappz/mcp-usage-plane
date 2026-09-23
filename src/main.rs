@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
 
+mod accounts;
 mod auth;
 mod billing;
 mod edge;
@@ -151,6 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(tokens::router())
         .merge(pricing::router())
         .merge(people::router())
+        .merge(accounts::router())
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         // Outermost, so it also bounds a client that is slow to send its body.
         // Without it a trickling request holds a pool connection for as long as

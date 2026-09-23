@@ -7,7 +7,7 @@
 # script checks that it is actually there rather than failing halfway through.
 #
 #   PLANE_URL=https://mcp-usage-plane.fly.dev \
-#   PLANE_SIGNUP_SECRET=... \
+#   PLANE_PROVISION_SECRET=... \
 #     scripts/provision-shadow.sh --name aggors
 #
 # Optional:
@@ -17,7 +17,7 @@
 #   --app aggors            emit `fly secrets set` for that app
 #
 # The tokens are printed once and are not recoverable afterwards, which is the
-# same property `POST /v1/signup` has. Capture them when you run this.
+# same property `POST /v1/accounts` has. Capture them when you run this.
 
 set -euo pipefail
 
@@ -44,7 +44,7 @@ for tool in curl jq; do
 done
 
 : "${PLANE_URL:?PLANE_URL is required, e.g. https://mcp-usage-plane.fly.dev}"
-: "${PLANE_SIGNUP_SECRET:?PLANE_SIGNUP_SECRET is required; it is the value PLANE_SIGNUP_SECRET is set to on the plane}"
+: "${PLANE_PROVISION_SECRET:?PLANE_PROVISION_SECRET is required; it is the value PLANE_PROVISION_SECRET is set to on the plane}"
 [[ -n "$name" ]] || { echo "--name is required" >&2; exit 2; }
 
 plane="${PLANE_URL%/}"
@@ -72,24 +72,24 @@ if [[ "$health_status" != "200" ]]; then
 fi
 
 echo "creating an account named ${name}..."
-signup="$(
-  curl -fsS -X POST "$plane/v1/signup" \
+created="$(
+  curl -fsS -X POST "$plane/v1/accounts" \
     -H 'content-type: application/json' \
-    -d "$(jq -nc --arg n "$name" --arg s "$PLANE_SIGNUP_SECRET" \
-            '{name: $n, signup_secret: $s}')"
+    -d "$(jq -nc --arg n "$name" --arg s "$PLANE_PROVISION_SECRET" \
+            '{name: $n, provision_secret: $s}')"
 )" || {
-  echo "signup failed. Two usual causes:" >&2
-  echo "  - PLANE_SIGNUP_SECRET does not match the plane's, which answers 401" >&2
-  echo "  - the plane has no PLANE_SIGNUP_SECRET set at all, which answers 404" >&2
+  echo "provisioning failed. Two usual causes:" >&2
+  echo "  - PLANE_PROVISION_SECRET does not match the plane's, which answers 401" >&2
+  echo "  - the plane has no PLANE_PROVISION_SECRET set at all, which answers 404" >&2
   exit 1
 }
 
-account_id="$(jq -r '.account_id' <<<"$signup")"
-admin_token="$(jq -r '.admin_token' <<<"$signup")"
-edge_token="$(jq -r '.edge_token' <<<"$signup")"
+account_id="$(jq -r '.account_id' <<<"$created")"
+admin_token="$(jq -r '.admin_token' <<<"$created")"
+edge_token="$(jq -r '.edge_token' <<<"$created")"
 
 [[ "$account_id" != "null" && -n "$account_id" ]] || {
-  echo "the plane did not return an account; response was: $signup" >&2
+  echo "the plane did not return an account; response was: $created" >&2
   exit 1
 }
 

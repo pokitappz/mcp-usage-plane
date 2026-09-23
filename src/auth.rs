@@ -117,10 +117,10 @@ async fn resolve(state: &AppState, parts: &Parts) -> Result<Caller, ApiError> {
 
     let Some(row) = row else {
         // A failure always reaches the database - there is nothing to cache -
-        // so it gets its own, tighter budget. Keyed on the presented hash, so
-        // one client working through a list of guesses is bounded even though
-        // every guess is a different key.
-        if !state.admission.take_failure(&token_hash) {
+        // so it gets its own budget, counted process-wide rather than per
+        // token. Keying it on the presented token would give every distinct
+        // guess a fresh allowance, which is not a bound on guessing at all.
+        if !state.admission.take_failure() {
             return Err(ApiError::TooManyRequests(
                 state.admission.retry_after_seconds(&token_hash),
             ));

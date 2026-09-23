@@ -1,0 +1,153 @@
+//! Operator provisioning: creating an account and its first credentials.
+//!
+//! # This is not a signup funnel
+//!
+//! It used to be called one, and it never was. There is no email here, no
+//! identity, no verification, and no way for a stranger to reach it: the only
+//! key is a shared secret held by whoever runs this service, and the route
+//! answers 404 when that secret is unset, which is the default.
+//!
+//! Selling the product does not require a self-serve funnel. An account is
+//! created here by hand, its Stripe customer is linked, its terms are set, and
+//! the monthly close bills it like any other. Revenue and self-service are
+//! separate questions, and conflating them is what made the old name
+//! misleading.
+//!
+//! People are a different thing again: a person signs in with an emailed code
+//! against a `users` row, in [`crate::people`]. An account is what gets billed;
+//! a person is who logs in to look at it.
+
+use axum::extract::State;
+use axum::http::HeaderMap;
+use axum::{Json, Router, routing};
+use serde::{Deserialize, Serialize};
+
+use crate::AppState;
+use crate::auth::{hash_token, mint_token};
+use crate::billing::constant_time_eq;
+use crate::error::{ApiError, ApiResult};
+
+/// Longest accepted account name.
+const MAX_NAME: usize = 200;
+
+/// Accounts one holder of the secret may create per window.
+///
+/// The old route took no budget at all. Nothing upstream takes one for a route
+/// with no bearer extractor, so a leaked secret meant unlimited accounts at
+/// line rate, which is a database filled by an attacker rather than a customer.
+const PROVISION_BURST: u32 = 20;
+
+/// The key provisioning attempts are counted against.
+///
+/// Fixed, so a caller guessing the secret cannot get a fresh allowance per
+/// guess. See the comment in `provision`.
+const PROVISION_SUBJECT: &str = "any";
+
+/// A request to create an account.
+#[derive(Debug, Deserialize)]
+pub struct ProvisionAccount {
+    /// Display name for the new account.
+    pub name: String,
+    /// The operator secret.
+    pub provision_secret: String,
+}
+
+/// A new account and its credentials. Both tokens appear exactly once, here.
+#[derive(Debug, Serialize)]
+pub struct ProvisionedAccount {
+    /// The new account identifier.
+    pub account_id: String,
+    /// Manages tenants, prices and export configuration.
+    pub admin_token: String,
+    /// Handed to a sidecar. Cannot reach pricing.
+    pub edge_token: String,
+}
+
+/// Operator routes.
+pub fn router() -> Router<AppState> {
+    Router::new().route("/v1/accounts", routing::post(provision))
+}
+
+async fn provision(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ProvisionAccount>,
+) -> ApiResult<Json<ProvisionedAccount>> {
+    // Closed unless a secret is configured, so a fresh deployment is not an
+    // open account factory.
+    let Some(expected) = state.billing.provision_secret.as_deref() else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Budget first, and counted against a fixed key rather than the presented
+    // secret. Keying it on the secret would give every wrong guess its own
+    // fresh allowance, which bounds nothing - a mistake this code made until a
+    // test caught it. A fixed key is right here in a way it would not be for a
+    // customer route: there is one operator, so a shared bound cannot be used
+    // to lock a legitimate user out.
+    //
+    // Taken explicitly because a route with no bearer extractor never reaches
+    // the per-token budget.
+    if !state
+        .admission
+        .take_named("provision", PROVISION_SUBJECT, PROVISION_BURST)
+    {
+        return Err(ApiError::TooManyRequests(
+            state.admission.retry_after_seconds(PROVISION_SUBJECT),
+        ));
+    }
+
+    if !constant_time_eq(expected.as_bytes(), body.provision_secret.as_bytes()) {
+        return Err(ApiError::Unauthorized);
+    }
+
+    let name = body.name.trim();
+    if name.is_empty() || name.len() > MAX_NAME {
+        return Err(ApiError::BadRequest(format!(
+            "name must be between 1 and {MAX_NAME} characters"
+        )));
+    }
+
+    let account_id = mint_token("acct").replace('_', "");
+    let admin_token = mint_token("mup_admin");
+    let edge_token = mint_token("mup_edge");
+
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("INSERT INTO accounts (id, name) VALUES ($1, $2)")
+        .bind(&account_id)
+        .bind(name)
+        .execute(&mut *tx)
+        .await?;
+    for (token, scope) in [(&admin_token, "admin"), (&edge_token, "edge")] {
+        sqlx::query(
+            "INSERT INTO account_tokens (token_sha256, account_id, scope, label)
+             VALUES ($1, $2, $3, 'provisioned')",
+        )
+        .bind(hash_token(token))
+        .bind(&account_id)
+        .bind(scope)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("INSERT INTO account_billing (account_id) VALUES ($1)")
+        .bind(&account_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    // The origin is recorded because an account that appears without one is
+    // worth noticing.
+    tracing::info!(
+        account_id,
+        origin = headers
+            .get(axum::http::header::ORIGIN)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("none"),
+        "provisioned an account"
+    );
+    Ok(Json(ProvisionedAccount {
+        account_id,
+        admin_token,
+        edge_token,
+    }))
+}

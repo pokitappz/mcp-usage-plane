@@ -1,7 +1,8 @@
 //! Account credential lifecycle.
 //!
 //! Before this, the only two places that ever minted an account token were
-//! signup and the startup bootstrap, and nothing revoked one. A lost or leaked
+//! provisioning and the startup bootstrap, and nothing revoked one. A lost or
+//! leaked
 //! admin token meant connecting to the database by hand, which is not a
 //! procedure anyone wants to discover during an incident.
 //!

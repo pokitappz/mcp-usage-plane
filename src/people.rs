@@ -19,7 +19,8 @@
 //!
 //! The process-local budget in [`crate::throttle`] is spent inside
 //! `auth::resolve`, so a route with no bearer extractor never touches it. That
-//! is exactly why `POST /v1/signup` is unbounded. Every route below takes a
+//! is why `POST /v1/accounts` has to take one explicitly too. Every route
+//! below takes a
 //! budget explicitly.
 
 use axum::extract::{FromRequestParts, State};

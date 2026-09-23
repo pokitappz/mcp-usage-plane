@@ -596,17 +596,83 @@ async fn a_period_is_charged_once_however_often_the_close_runs() {
     );
 }
 
-// ----------------------------------------------------------------- signup
+// ----------------------------------------------------------- provisioning
 
 #[tokio::test]
-async fn signup_is_closed_unless_a_secret_is_configured() {
+async fn provisioning_is_rate_limited_even_with_the_right_secret() {
+    // The route takes no bearer extractor, so it never reaches the per-token
+    // budget - which is why it used to be unbounded. A leaked secret meant
+    // unlimited accounts at line rate.
+    let db = require_db!();
+    let plane =
+        Plane::start_with_env(&db, &[("PLANE_PROVISION_SECRET", common::PROVISION_SECRET)]).await;
+
+    let mut refused = false;
+    for attempt in 0..60 {
+        let (status, _) = plane
+            .send(
+                Method::POST,
+                "/v1/accounts",
+                Some(json!({
+                    "name": format!("account {attempt}"),
+                    "provision_secret": common::PROVISION_SECRET
+                })),
+                None,
+            )
+            .await;
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            refused = true;
+            break;
+        }
+        assert_eq!(status, 200, "unexpected status {status}");
+    }
+    assert!(refused, "provisioning must be bounded, not unlimited");
+}
+
+#[tokio::test]
+async fn guessing_the_provisioning_secret_is_bounded_too() {
+    // Keyed on the presented secret, so a caller working through guesses is
+    // bounded even though every guess is a different key.
+    let db = require_db!();
+    let plane =
+        Plane::start_with_env(&db, &[("PLANE_PROVISION_SECRET", common::PROVISION_SECRET)]).await;
+
+    let mut saw_unauthorized = false;
+    let mut throttled = false;
+    for attempt in 0..60 {
+        let (status, _) = plane
+            .send(
+                Method::POST,
+                "/v1/accounts",
+                Some(json!({
+                    "name": "probe",
+                    "provision_secret": format!("guess-{attempt}")
+                })),
+                None,
+            )
+            .await;
+        match status {
+            reqwest::StatusCode::UNAUTHORIZED => saw_unauthorized = true,
+            reqwest::StatusCode::TOO_MANY_REQUESTS => {
+                throttled = true;
+                break;
+            }
+            other => panic!("unexpected status {other}"),
+        }
+    }
+    assert!(saw_unauthorized, "a wrong secret must be refused as such");
+    assert!(throttled, "repeated guesses must be bounded");
+}
+
+#[tokio::test]
+async fn provisioning_is_closed_unless_a_secret_is_configured() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
     let (status, _) = plane
         .send(
             Method::POST,
-            "/v1/signup",
-            Some(json!({"name": "Acme", "signup_secret": "anything"})),
+            "/v1/accounts",
+            Some(json!({"name": "Acme", "provision_secret": "anything"})),
             None,
         )
         .await;
@@ -617,15 +683,16 @@ async fn signup_is_closed_unless_a_secret_is_configured() {
 }
 
 #[tokio::test]
-async fn signup_issues_working_tokens_scoped_to_a_new_account() {
+async fn provisioning_issues_working_tokens_scoped_to_a_new_account() {
     let db = require_db!();
-    let plane = Plane::start_with_env(&db, &[("PLANE_SIGNUP_SECRET", common::SIGNUP_SECRET)]).await;
+    let plane =
+        Plane::start_with_env(&db, &[("PLANE_PROVISION_SECRET", common::PROVISION_SECRET)]).await;
 
     let (status, _) = plane
         .send(
             Method::POST,
-            "/v1/signup",
-            Some(json!({"name": "Acme", "signup_secret": "wrong"})),
+            "/v1/accounts",
+            Some(json!({"name": "Acme", "provision_secret": "wrong"})),
             None,
         )
         .await;
@@ -634,8 +701,8 @@ async fn signup_issues_working_tokens_scoped_to_a_new_account() {
     let (status, created) = plane
         .send(
             Method::POST,
-            "/v1/signup",
-            Some(json!({"name": "Acme", "signup_secret": common::SIGNUP_SECRET})),
+            "/v1/accounts",
+            Some(json!({"name": "Acme", "provision_secret": common::PROVISION_SECRET})),
             None,
         )
         .await;
@@ -828,7 +895,7 @@ async fn one_stripe_customer_cannot_be_claimed_by_two_accounts() {
     // With two accounts naming the same customer that touches both rows, and
     // upstream billing invoices one party for the other's usage.
     let db = require_db!();
-    let plane = Plane::start_with_env(&db, &[("PLANE_SIGNUP_SECRET", "signup-secret")]).await;
+    let plane = Plane::start_with_env(&db, &[("PLANE_PROVISION_SECRET", "provision-secret")]).await;
 
     let (status, _) = plane
         .admin(
@@ -839,12 +906,12 @@ async fn one_stripe_customer_cannot_be_claimed_by_two_accounts() {
         .await;
     assert_eq!(status, 200, "the first claim is allowed");
 
-    // A second account, created through signup so it has its own admin token.
+    // A second account, provisioned so it has its own admin token.
     let (status, created) = plane
         .send(
             Method::POST,
-            "/v1/signup",
-            Some(json!({"name": "second", "signup_secret": "signup-secret"})),
+            "/v1/accounts",
+            Some(json!({"name": "second", "provision_secret": "provision-secret"})),
             None,
         )
         .await;

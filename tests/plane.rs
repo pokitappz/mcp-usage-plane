@@ -241,7 +241,7 @@ async fn one_accounts_data_is_invisible_to_another() {
     plane.seed_tenant("acme", "cus_acme").await;
 
     // A second account with its own admin token, inserted directly because the
-    // plane has no self-serve signup yet.
+    // accounts are provisioned by an operator, never self-serve.
     let pool = sqlx::PgPool::connect(&plane.db_url).await.expect("connect");
     sqlx::query("INSERT INTO accounts (id, name) VALUES ('acct_other', 'other')")
         .execute(&pool)

@@ -66,7 +66,7 @@ prices.
 | `POST /v1/auth/verify` | none | Redeem a code for a browser session |
 | `GET /v1/auth/session` | session | Who the caller is and which account they act on |
 | `DELETE /v1/auth/session` | session | Sign out, deleting the session server side |
-| `POST /v1/signup` | none | Operator tool, gated by a shared secret. Not the human path |
+| `POST /v1/accounts` | secret | Operator provisioning. Closed unless a secret is set, and never self-serve |
 | `POST /v1/stripe/webhook` | signature | Subscription lifecycle and invoice outcomes from Stripe |
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
@@ -101,8 +101,13 @@ state-changing request with **no** `Origin` header is refused rather than assume
 friendly, so the CSRF check fails closed.
 
 Access is granted by hand: a user row and a membership are created when an
-access request is approved. `POST /v1/signup` remains an operator tool with a
-shared secret, no email and no verification, and is not the human path.
+access request is approved. `POST /v1/accounts` is the operator route that
+creates the account itself, gated by a shared secret and closed by default.
+
+**There is no self-serve signup, and selling the product does not need one.**
+Revenue and self-service are separate questions: an account is created by hand,
+its Stripe customer is linked, its terms are set, and the monthly close bills it
+like any other.
 
 ## Request bounds
 
@@ -112,7 +117,8 @@ authentication cache, both process-local.
 | Bound | Value | Why |
 |---|---|---|
 | Requests per token | 240 / minute | Refused with `429` and a `Retry-After`. Per token, so one customer's sidecar cannot deny service to another |
-| Failed authentications | 20 / minute | Tighter, and counted separately. A failure always reaches the database because there is nothing to cache |
+| Failed authentications | 120 / minute, process-wide | Counted globally, not per credential. A per-credential budget gives every distinct guess a fresh allowance, which bounds nothing; success uses a separate budget, so this cannot deny a valid caller |
+| Account provisioning | 20 / minute, process-wide | Same reason. There is one operator, so a shared bound cannot lock out a legitimate user |
 | Sign-in codes | 5 / minute per address | Taken explicitly. The per-token budget is spent inside `auth::resolve`, so a route with no bearer extractor never reaches it |
 | Code redemptions | 20 / minute per address | Same reason |
 | Authentication cache | 10 seconds | Removes a database round trip from every request. Revoking a token calls through to drop the entry, so revocation does not wait for the TTL |
@@ -299,7 +305,7 @@ repointing and hoping. `scripts/` has the two halves:
 
 ```sh
 # 2. Create an account and print the secrets that enable the mirror.
-PLANE_URL=https://mcp-usage-plane.fly.dev PLANE_SIGNUP_SECRET=... \
+PLANE_URL=https://mcp-usage-plane.fly.dev PLANE_PROVISION_SECRET=... \
   scripts/provision-shadow.sh --name aggors --app aggors
 
 # 3. After some traffic, compare the two ledgers by aggregate identifier.
@@ -345,7 +351,7 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_STRIPE_SECRET_KEY` | none | The plane's own Stripe key. Upstream billing is idle without it |
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
-| `PLANE_SIGNUP_SECRET` | none | Gates `/v1/signup`. Signup is closed without it |
+| `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |
 
 ## Tests
 

@@ -28,7 +28,7 @@ use std::time::Duration;
 pub const ACCOUNT: &str = "acct_test";
 /// 32 bytes of nothing, base64. Fine for a scratch database.
 pub const SEALING_KEY: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-pub const SIGNUP_SECRET: &str = "signup-secret-not-a-real-secret";
+pub const PROVISION_SECRET: &str = "provision-secret-not-a-real-secret";
 pub const WEBHOOK_SECRET: &str = "whsec_not_a_real_secret";
 pub const ADMIN_TOKEN: &str = "mup_admin_test_token_not_a_real_secret_0001";
 pub const EDGE_TOKEN: &str = "mup_edge_test_token_not_a_real_secret_0001";
