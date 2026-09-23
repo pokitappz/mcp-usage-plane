@@ -433,8 +433,19 @@ async fn a_closed_period_charges_the_floor_when_there_was_no_usage() {
         .await;
     assert_eq!(status, 200);
 
-    eventually("the plane to close a period", || async {
-        !fake.values().is_empty()
+    // Wait for the charge to be SETTLED, not merely sent. `settle_unsettled`
+    // submits and then marks the row, so waiting on the fake receiving
+    // something returns inside that window - which is a race this test lost on
+    // CI, where the gap between the two is wide enough to observe.
+    eventually("the plane to close and settle a period", || {
+        let plane = &plane;
+        async move {
+            let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+            invoices
+                .as_array()
+                .and_then(|rows| rows.first())
+                .is_some_and(|row| row["settled"] == true)
+        }
     })
     .await;
 

@@ -238,6 +238,33 @@ the correct reading of "this customer's quota". Where such tenants disagree on
 unit price the highest applies, because over-stating spend is the safe direction
 for a spend cap.
 
+## Shadow migration
+
+Moving a live, billed application onto this plane is done by comparison, not by
+repointing and hoping. `scripts/` has the two halves:
+
+```sh
+# 2. Create an account and print the secrets that enable the mirror.
+PLANE_URL=https://mcp-usage-plane.fly.dev PLANE_SIGNUP_SECRET=... \
+  scripts/provision-shadow.sh --name aggors --app aggors
+
+# 3. After some traffic, compare the two ledgers by aggregate identifier.
+AGGORS_DATABASE_URL=... PLANE_DATABASE_URL=... \
+  scripts/reconcile-shadow.sh
+```
+
+Step 1 is deploying the plane; `provision-shadow.sh` checks `/healthz` first and
+says so rather than failing partway through.
+
+Reconciliation separates three outcomes deliberately, because they mean
+different things. A **unit mismatch** is a real disagreement between the two
+metering implementations and is what the comparison is for. **Missing from the
+plane** is a delivery gap - the mirror drops rather than failing, by design, so
+this is expected after any window the plane was unreachable. **Missing from the
+source** should not happen at all and means something other than the mirror
+wrote to that account. The script exits non-zero for the first and third, and
+zero for a delivery gap alone.
+
 ## Running it
 
 ```sh
