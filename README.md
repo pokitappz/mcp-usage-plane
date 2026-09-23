@@ -154,10 +154,26 @@ disagree with the ledger and die with the process.
 
 ## What the plane charges
 
-`max(floor_micros, revenue_micros * rate_bps / 10_000)` per account per calendar
-month, where `revenue_micros` is the account's **own** metered revenue - the sum
-of what it charged its customers, which the plane already computes into
-`usage_counters.spend_micros` for spend caps.
+```
+max(floor_micros,
+    max(0, units - included_units) * per_event_micros
+    + revenue_micros * rate_bps / 10_000)
+```
+
+per account per calendar month. `units` is metered events; `revenue_micros` is
+the account's **own** metered revenue, the sum of what it charged its customers,
+which the plane already computes into `usage_counters.spend_micros` for spend
+caps.
+
+Two priced dimensions, summed, then floored. An account normally uses one:
+
+| Model | Terms |
+|---|---|
+| Published price: free under 50k events, then $0.50 per 10k | `per_event_micros = 50`, `included_units = 50_000`, `rate_bps = 0` |
+| Negotiated percentage of revenue, with a minimum | `rate_bps = 150`, `floor_micros = 49_000_000`, `per_event_micros = 0` |
+
+Summing rather than choosing means a hybrid needs no mode flag, and a mode flag
+is the kind of thing that ends up disagreeing with the invoice.
 
 Everything is integer arithmetic in millionths, via `i128` for the multiply.
 This multiplies money, and a rounding nobody can reproduce from an invoice is a

@@ -58,6 +58,15 @@ pub struct Pricing {
     pub rate_bps: i32,
     /// Monthly minimum, in millionths.
     pub floor_micros: i64,
+    /// Charged per metered event beyond [`Self::included_units`], in millionths.
+    ///
+    /// 50 is the published price: 50 millionths x 10,000 events is $0.50.
+    pub per_event_micros: i64,
+    /// Metered events included before [`Self::per_event_micros`] applies.
+    ///
+    /// The free allowance, and the reason a small server pays nothing rather
+    /// than pennies.
+    pub included_units: i64,
     /// When the terms begin applying.
     pub starts_at: DateTime<Utc>,
     /// When the terms stop applying.
@@ -84,6 +93,12 @@ pub struct SetPricing {
     pub rate_bps: i32,
     /// Monthly minimum, in millionths.
     pub floor_micros: i64,
+    /// Charged per metered event beyond `included_units`, in millionths.
+    #[serde(default)]
+    pub per_event_micros: i64,
+    /// Metered events included before `per_event_micros` applies.
+    #[serde(default)]
+    pub included_units: i64,
     /// When the terms begin. Defaults to now; set it to backdate deliberately.
     #[serde(default)]
     pub starts_at: Option<DateTime<Utc>>,
@@ -107,6 +122,10 @@ pub struct Invoice {
     pub rate_bps: i32,
     /// The floor applied.
     pub floor_micros: i64,
+    /// The per-event rate applied.
+    pub per_event_micros: i64,
+    /// The free allowance applied.
+    pub included_units: i64,
     /// What the plane charged.
     pub charge_micros: i64,
     /// Whether the provider has accepted it.
@@ -120,18 +139,40 @@ pub fn router() -> Router<AppState> {
         .route("/v1/pricing/invoices", routing::get(invoices))
 }
 
-/// The charge for a period, in millionths.
-///
-/// Integer throughout, via `i128` for the multiply: revenue in millionths times
-/// ten thousand basis points overflows `i64` at around 92 million currency
-/// units of revenue, which is not a ceiling to discover in production.
-#[must_use]
-pub fn charge_micros(revenue_micros: i64, rate_bps: i32, floor_micros: i64) -> i64 {
-    let metered = i128::from(revenue_micros)
-        .saturating_mul(i128::from(rate_bps))
-        .saturating_div(BPS_DIVISOR);
-    let floor = i128::from(floor_micros);
-    i64::try_from(metered.max(floor)).unwrap_or(i64::MAX)
+impl Pricing {
+    /// The charge for a period, in millionths.
+    ///
+    /// ```text
+    /// max(floor_micros,
+    ///     max(0, units - included_units) * per_event_micros
+    ///     + revenue_micros * rate_bps / 10_000)
+    /// ```
+    ///
+    /// Two priced dimensions, summed, then floored. An account normally uses
+    /// one of them: the published price is per event with `rate_bps = 0`, and a
+    /// negotiated percentage deal sets `per_event_micros = 0`. Summing rather
+    /// than choosing means a hybrid is expressible without a mode flag, and a
+    /// mode flag is the kind of thing that ends up disagreeing with the
+    /// invoice.
+    ///
+    /// Integer throughout, via `i128` for the multiplies. Revenue in millionths
+    /// times ten thousand basis points overflows `i64` at around 92 million
+    /// currency units, and units times a per-event rate overflows sooner than
+    /// that; neither is a ceiling to discover in production.
+    #[must_use]
+    pub fn charge_micros(&self, revenue_micros: i64, units: i64) -> i64 {
+        let billable_units = i128::from(units)
+            .saturating_sub(i128::from(self.included_units))
+            .max(0);
+        let per_event = billable_units.saturating_mul(i128::from(self.per_event_micros));
+
+        let metered = i128::from(revenue_micros)
+            .saturating_mul(i128::from(self.rate_bps))
+            .saturating_div(BPS_DIVISOR);
+
+        let charged = per_event.saturating_add(metered);
+        i64::try_from(charged.max(i128::from(self.floor_micros))).unwrap_or(i64::MAX)
+    }
 }
 
 /// Millionths as whole cents, rounded half up.
@@ -172,7 +213,8 @@ async fn read(
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Pricing>> {
     let row = sqlx::query(
-        "SELECT rate_bps, floor_micros, starts_at, ends_at
+        "SELECT rate_bps, floor_micros, per_event_micros, included_units,
+                starts_at, ends_at
          FROM plane_pricing WHERE account_id = $1",
     )
     .bind(&caller.account_id)
@@ -183,6 +225,8 @@ async fn read(
         Some(row) => Pricing {
             rate_bps: row.try_get("rate_bps")?,
             floor_micros: row.try_get("floor_micros")?,
+            per_event_micros: row.try_get("per_event_micros")?,
+            included_units: row.try_get("included_units")?,
             starts_at: row.try_get("starts_at")?,
             ends_at: row.try_get("ends_at")?,
         },
@@ -191,6 +235,8 @@ async fn read(
         None => Pricing {
             rate_bps: 0,
             floor_micros: 0,
+            per_event_micros: 0,
+            included_units: 0,
             starts_at: Utc::now(),
             ends_at: None,
         },
@@ -207,18 +253,28 @@ async fn write(
             "rate_bps must be between 0 and 10000".to_owned(),
         ));
     }
-    if body.floor_micros < 0 {
-        return Err(ApiError::BadRequest(
-            "floor_micros must not be negative".to_owned(),
-        ));
+    for (field, value) in [
+        ("floor_micros", body.floor_micros),
+        ("per_event_micros", body.per_event_micros),
+        ("included_units", body.included_units),
+    ] {
+        if value < 0 {
+            return Err(ApiError::BadRequest(format!(
+                "{field} must not be negative"
+            )));
+        }
     }
 
     sqlx::query(
-        "INSERT INTO plane_pricing (account_id, rate_bps, floor_micros, starts_at, ends_at)
-         VALUES ($1, $2, $3, COALESCE($4, NOW()), $5)
+        "INSERT INTO plane_pricing
+           (account_id, rate_bps, floor_micros, per_event_micros, included_units,
+            starts_at, ends_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6, NOW()), $7)
          ON CONFLICT (account_id) DO UPDATE
            SET rate_bps = EXCLUDED.rate_bps,
                floor_micros = EXCLUDED.floor_micros,
+               per_event_micros = EXCLUDED.per_event_micros,
+               included_units = EXCLUDED.included_units,
                starts_at = EXCLUDED.starts_at,
                ends_at = EXCLUDED.ends_at,
                updated_at = NOW()",
@@ -226,6 +282,8 @@ async fn write(
     .bind(&caller.account_id)
     .bind(body.rate_bps)
     .bind(body.floor_micros)
+    .bind(body.per_event_micros)
+    .bind(body.included_units)
     .bind(body.starts_at)
     .bind(body.ends_at)
     .execute(&state.pool)
@@ -240,7 +298,8 @@ async fn invoices(
 ) -> ApiResult<Json<Vec<Invoice>>> {
     let rows = sqlx::query(
         "SELECT period_start, period_end, revenue_micros, units, rate_bps,
-                floor_micros, charge_micros, settled_at
+                floor_micros, per_event_micros, included_units,
+                charge_micros, settled_at
          FROM plane_invoices
          WHERE account_id = $1
          ORDER BY period_start DESC
@@ -260,6 +319,8 @@ async fn invoices(
                 units: row.try_get("units")?,
                 rate_bps: row.try_get("rate_bps")?,
                 floor_micros: row.try_get("floor_micros")?,
+                per_event_micros: row.try_get("per_event_micros")?,
+                included_units: row.try_get("included_units")?,
                 charge_micros: row.try_get("charge_micros")?,
                 settled: settled_at.is_some(),
             })
@@ -297,8 +358,8 @@ async fn close_all(state: &AppState, destination: &Destination) -> Result<(), sq
     // and no customer accrues periods it cannot be charged for, which shows up
     // as unsettled rows rather than as silence.
     let rows = sqlx::query(
-        "SELECT p.account_id, p.rate_bps, p.floor_micros, p.starts_at, p.ends_at,
-                b.stripe_customer_id
+        "SELECT p.account_id, p.rate_bps, p.floor_micros, p.per_event_micros,
+                p.included_units, p.starts_at, p.ends_at, b.stripe_customer_id
          FROM plane_pricing p
          JOIN account_billing b ON b.account_id = p.account_id
          WHERE b.stripe_customer_id IS NOT NULL",
@@ -311,6 +372,8 @@ async fn close_all(state: &AppState, destination: &Destination) -> Result<(), sq
         let terms = Pricing {
             rate_bps: row.try_get("rate_bps")?,
             floor_micros: row.try_get("floor_micros")?,
+            per_event_micros: row.try_get("per_event_micros")?,
+            included_units: row.try_get("included_units")?,
             starts_at: row.try_get("starts_at")?,
             ends_at: row.try_get("ends_at")?,
         };
@@ -386,7 +449,7 @@ async fn record_period(
 
     let revenue_micros: i64 = totals.try_get("revenue_micros")?;
     let units: i64 = totals.try_get("units")?;
-    let charge = charge_micros(revenue_micros, terms.rate_bps, terms.floor_micros);
+    let charge = terms.charge_micros(revenue_micros, units);
 
     // `YYYY-MM` rather than a timestamp: the identifier is what the provider
     // deduplicates on, so it has to be stable across retries and readable in a
@@ -396,8 +459,9 @@ async fn record_period(
     let inserted = sqlx::query(
         "INSERT INTO plane_invoices
            (account_id, period_start, period_end, revenue_micros, units,
-            rate_bps, floor_micros, charge_micros, identifier)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            rate_bps, floor_micros, per_event_micros, included_units,
+            charge_micros, identifier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (account_id, period_start) DO NOTHING",
     )
     .bind(account_id)
@@ -407,6 +471,8 @@ async fn record_period(
     .bind(units)
     .bind(terms.rate_bps)
     .bind(terms.floor_micros)
+    .bind(terms.per_event_micros)
+    .bind(terms.included_units)
     .bind(charge)
     .bind(&identifier)
     .execute(pool)
@@ -529,13 +595,106 @@ async fn mark_settled(pool: &PgPool, identifier: &str) -> Result<(), sqlx::Error
 mod tests {
     use super::*;
 
+    /// Terms with everything zeroed, so each test sets only what it is about.
+    fn terms() -> Pricing {
+        Pricing {
+            rate_bps: 0,
+            floor_micros: 0,
+            per_event_micros: 0,
+            included_units: 0,
+            starts_at: Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            ends_at: None,
+        }
+    }
+
+    #[test]
+    fn the_published_per_event_price_is_what_the_pricing_page_says() {
+        // Free under 50,000 metered events a month, then $0.50 per 10,000.
+        // If this test and the pricing page ever disagree, one of them is
+        // lying to a customer.
+        let published = Pricing {
+            per_event_micros: 50,
+            included_units: 50_000,
+            ..terms()
+        };
+
+        assert_eq!(
+            published.charge_micros(0, 50_000),
+            0,
+            "exactly the allowance is still free"
+        );
+        assert_eq!(
+            published.charge_micros(0, 49_999),
+            0,
+            "under the allowance is free"
+        );
+        // 10,000 events past the allowance, at 50 millionths each.
+        assert_eq!(published.charge_micros(0, 60_000), 500_000, "$0.50");
+        assert_eq!(published.charge_micros(0, 1_050_000), 50_000_000, "$50.00");
+    }
+
+    #[test]
+    fn per_event_billing_ignores_what_the_customer_charges() {
+        // The trade made when choosing a forecastable price: revenue is not an
+        // input, so a customer who doubles their own prices owes the same.
+        let published = Pricing {
+            per_event_micros: 50,
+            included_units: 0,
+            ..terms()
+        };
+        assert_eq!(published.charge_micros(0, 10_000), 500_000);
+        assert_eq!(
+            published.charge_micros(999_999_999, 10_000),
+            500_000,
+            "rate_bps is zero, so revenue must not reach the charge"
+        );
+    }
+
+    #[test]
+    fn the_two_dimensions_sum_rather_than_one_winning() {
+        // A hybrid is expressible without a mode flag, and a mode flag is the
+        // kind of thing that ends up disagreeing with the invoice.
+        let hybrid = Pricing {
+            rate_bps: 100,
+            per_event_micros: 10,
+            ..terms()
+        };
+        // 1% of 1,000,000 is 10,000. 2,000 events at 10 is 20,000.
+        assert_eq!(hybrid.charge_micros(1_000_000, 2_000), 30_000);
+    }
+
+    #[test]
+    fn the_allowance_cannot_make_a_charge_negative() {
+        let generous = Pricing {
+            per_event_micros: 50,
+            included_units: 1_000_000,
+            ..terms()
+        };
+        assert_eq!(generous.charge_micros(0, 1), 0);
+        assert_eq!(generous.charge_micros(0, 0), 0);
+    }
+
+    #[test]
+    fn a_huge_event_count_does_not_overflow_the_multiply() {
+        let expensive = Pricing {
+            per_event_micros: i64::MAX,
+            ..terms()
+        };
+        assert_eq!(expensive.charge_micros(0, i64::MAX), i64::MAX);
+    }
+
     #[test]
     fn the_floor_applies_when_the_percentage_comes_to_less() {
         // The whole reason this is a period and not a drip.
         let floor = 49_000_000; // 49 currency units
-        assert_eq!(charge_micros(0, 150, floor), floor, "no usage still owes");
+        let percentage = Pricing {
+            rate_bps: 150,
+            floor_micros: floor,
+            ..terms()
+        };
+        assert_eq!(percentage.charge_micros(0, 0), floor, "no usage still owes");
         assert_eq!(
-            charge_micros(1_000_000_000, 150, floor),
+            percentage.charge_micros(1_000_000_000, 0),
             floor,
             "1.5% of 1000 is 15, under the floor"
         );
@@ -543,9 +702,13 @@ mod tests {
 
     #[test]
     fn the_percentage_applies_once_it_passes_the_floor() {
-        let floor = 49_000_000;
+        let percentage = Pricing {
+            rate_bps: 150,
+            floor_micros: 49_000_000,
+            ..terms()
+        };
         // 1.5% of 10,000 currency units is 150, over the floor.
-        assert_eq!(charge_micros(10_000_000_000, 150, floor), 150_000_000);
+        assert_eq!(percentage.charge_micros(10_000_000_000, 0), 150_000_000);
     }
 
     #[test]
@@ -553,8 +716,12 @@ mod tests {
         // 200 bps of 12.345678 currency units. No floats anywhere: this
         // multiplies money, and a rounding nobody can reproduce from an
         // invoice is a support ticket.
-        assert_eq!(charge_micros(12_345_678, 200, 0), 246_913);
-        assert_eq!(charge_micros(0, 0, 0), 0);
+        let percentage = Pricing {
+            rate_bps: 200,
+            ..terms()
+        };
+        assert_eq!(percentage.charge_micros(12_345_678, 0), 246_913);
+        assert_eq!(terms().charge_micros(0, 0), 0);
     }
 
     #[test]
@@ -563,7 +730,11 @@ mod tests {
         // at around 92 million currency units, which is a ceiling nobody wants
         // to find in production.
         let huge = i64::MAX / 2;
-        let charged = charge_micros(huge, 10_000, 0);
+        let charged = Pricing {
+            rate_bps: 10_000,
+            ..terms()
+        }
+        .charge_micros(huge, 0);
         assert_eq!(charged, huge, "100% of revenue is revenue");
     }
 
@@ -588,6 +759,8 @@ mod tests {
         let agreed_in_february = Pricing {
             rate_bps: 150,
             floor_micros: 49_000_000,
+            per_event_micros: 0,
+            included_units: 0,
             starts_at: Utc.with_ymd_and_hms(2027, 2, 3, 0, 0, 0).unwrap(),
             ends_at: None,
         };
@@ -615,6 +788,8 @@ mod tests {
         let ended_in_december = Pricing {
             rate_bps: 150,
             floor_micros: 0,
+            per_event_micros: 0,
+            included_units: 0,
             starts_at: Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap(),
             ends_at: Some(Utc.with_ymd_and_hms(2026, 12, 31, 0, 0, 0).unwrap()),
         };
