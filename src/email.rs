@@ -34,6 +34,7 @@ const SIGN_IN_SUBJECT: &str = "Your UsageKit sign-in code";
 /// this is attempted.
 const OPERATOR_EMAIL: &str = "support@pokitapps.com";
 const ACCESS_SUBJECT: &str = "UsageKit Cloud access request";
+const GRANTED_SUBJECT: &str = "Your UsageKit Cloud account is ready";
 
 /// Why a message could not be sent. Never carries message content.
 #[derive(Debug, thiserror::Error)]
@@ -213,6 +214,42 @@ impl EmailClient {
                 escape_html(company),
                 escape_html(&expected),
                 escape_html(note)
+            ),
+        };
+
+        self.deliver(&message).await
+    }
+
+    /// Tell somebody their access request was granted.
+    ///
+    /// Carries no credential, and cannot: sign-in is passwordless, so the only
+    /// thing this needs to say is that the address now works. A mail that
+    /// contained a secret would be a secret sitting in a mailbox forever.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EmailError`] category. The caller treats a failure as
+    /// non-fatal and reports it, because the account exists either way.
+    pub async fn send_access_granted(&self, to: &str, sign_in_url: &str) -> Result<(), EmailError> {
+        let message = Message {
+            from_name: FROM_NAME,
+            from_email: FROM_EMAIL,
+            to: vec![Recipient { email: to }],
+            subject: GRANTED_SUBJECT,
+            text_content: format!(
+                "Your UsageKit Cloud account is ready.\n\n\
+                 Sign in at {sign_in_url} with this address. There is no password: \
+                 we email you a six digit code each time.\n\n\
+                 Your first step is minting an edge token from the dashboard and \
+                 pointing a sidecar at it.\n"
+            ),
+            html_content: format!(
+                "<p>Your UsageKit Cloud account is ready.</p>\
+                 <p>Sign in at <a href=\"{url}\">{url}</a> with this address. \
+                 There is no password: we email you a six digit code each time.</p>\
+                 <p>Your first step is minting an edge token from the dashboard and \
+                 pointing a sidecar at it.</p>",
+                url = escape_html(sign_in_url)
             ),
         };
 

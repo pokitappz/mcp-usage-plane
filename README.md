@@ -67,6 +67,9 @@ prices.
 | `GET /v1/auth/session` | session | Who the caller is and which account they act on |
 | `DELETE /v1/auth/session` | session | Sign out, deleting the session server side |
 | `POST /v1/accounts` | secret | Operator provisioning. Closed unless a secret is set, and never self-serve |
+| `GET /v1/access-requests` | secret | The queue. Pending by default; `?state=granted,declined,all` |
+| `POST /v1/access-requests/{id}/grant` | secret | Create the account and its owner, and mark the request granted |
+| `POST /v1/access-requests/{id}/decline` | secret | Mark it declined, so the queue drains |
 | `POST /v1/stripe/webhook` | signature | Subscription lifecycle and invoice outcomes from Stripe |
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
@@ -147,9 +150,52 @@ because anything else makes the endpoint an account-existence oracle. And a
 state-changing request with **no** `Origin` header is refused rather than assumed
 friendly, so the CSRF check fails closed.
 
-Access is granted by hand: a user row and a membership are created when an
-access request is approved. `POST /v1/accounts` is the operator route that
-creates the account itself, gated by a shared secret and closed by default.
+An address is matched case-insensitively. The columns are `CITEXT`, but that is
+not enough on its own: a bound parameter arrives as `text`, and Postgres
+resolves `citext = text` by casting the *column* down to text, which compares
+case-sensitively. Every lookup therefore casts the parameter with `$1::citext`.
+Without it somebody invited as `Person@Example.com` who types
+`person@example.com` is simply not found, and because an unknown address is
+answered identically to a known one, they are told a code was sent and wait for
+mail that was never generated.
+
+## The access queue
+
+Access is granted by hand, and this is the flow that does it. The form on the
+landing page writes a row; nothing else happens until a person decides.
+
+```sh
+PLANE_URL=https://usagekit.cloud PLANE_PROVISION_SECRET=... \
+  scripts/access-queue.sh list
+
+scripts/access-queue.sh grant 12 --name "Northwind Tools"
+scripts/access-queue.sh decline 13
+```
+
+Granting is one transaction: the account, its billing row, the person, their
+membership and the decision all commit together or none of them do. The failure
+that prevents is an account created while the request stays pending, which an
+operator then grants again, producing a second account nobody will ever open.
+
+Four refusals, each for a reason worth knowing:
+
+| Situation | Answer |
+|---|---|
+| Already granted | `409`, naming the request. Still true after the person is deleted, so an old queue cannot be reprocessed into a duplicate |
+| Already declined | `409`. A decision is not reversible through this route |
+| The address already has an account | `409`, naming that account. A session resolves to the oldest membership and there is no account switcher, so a second account would be one they could never reach |
+| No `PLANE_PROVISION_SECRET` configured | `404`, not `401`. A deployment without operator access should not advertise that these routes exist |
+
+**Granting mints no credentials.** It produces an account and somebody who can
+sign in; they mint their own tokens from the dashboard, which is the one place
+a credential can be shown to the person who will actually hold it. This is the
+deliberate difference from `POST /v1/accounts`, which does mint a pair because
+it provisions accounts that may have no human at all.
+
+The notification is sent after the commit and is reported rather than hidden:
+the grant response carries `notified`, so an operator whose mail service is
+down knows to tell the person by hand instead of waiting for a sign-in that is
+never attempted.
 
 **There is no self-serve signup, and selling the product does not need one.**
 Revenue and self-service are separate questions: an account is created by hand,

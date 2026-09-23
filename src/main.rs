@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
 
+mod access;
 mod accounts;
 mod app;
 mod auth;
@@ -197,6 +198,7 @@ fn build_router(state: AppState) -> Router {
         .merge(pricing::router())
         .merge(people::router())
         .merge(accounts::router())
+        .merge(access::router())
         .merge(pages::router())
         .merge(app::router())
         // `ServeDir` resolves against the process working directory rather than

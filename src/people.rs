@@ -302,8 +302,15 @@ pub async fn issue_code(
 
     // Only a known user is sent a code. Access is granted by hand, so an
     // address nobody invited has nothing to sign in to.
+    // `$1::citext` is load bearing. sqlx binds every parameter as `text`, and
+    // Postgres resolves `citext = text` by casting the *column* down to text,
+    // which is case sensitive. Without the cast the column type is silently
+    // defeated: somebody invited as `Person@Example.com` who types
+    // `person@example.com` is simply not found, and because this endpoint
+    // deliberately answers the same way for an unknown address, they are told a
+    // code was sent and it never arrives.
     let user: Option<(String, Option<DateTime<Utc>>)> =
-        sqlx::query("SELECT id, disabled_at FROM users WHERE email = $1")
+        sqlx::query("SELECT id, disabled_at FROM users WHERE email = $1::citext")
             .bind(&email)
             .fetch_optional(&state.pool)
             .await?
@@ -429,7 +436,7 @@ pub async fn redeem_code(
         "SELECT c.user_id, c.code_sha256, c.attempts, c.expires_at
          FROM user_login_codes c
          JOIN users u ON u.id = c.user_id
-         WHERE u.email = $1 AND u.disabled_at IS NULL
+         WHERE u.email = $1::citext AND u.disabled_at IS NULL
          FOR UPDATE OF c",
     )
     .bind(&email)
@@ -546,6 +553,59 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         .headers_mut()
         .insert(header::SET_COOKIE, clear_cookie());
     Ok(response)
+}
+
+/// Create a person, or reuse the one that address already names, and give
+/// them ownership of an account.
+///
+/// Nothing in this service could do this before: `users` and `memberships`
+/// were written only by test fixtures, so granting somebody access meant
+/// connecting to Postgres and writing two rows by hand.
+///
+/// `verified_at` stays null. A row here means invited, not proven: the person
+/// becomes verified by redeeming their first emailed code, which is the step
+/// that shows they actually read that mailbox. [`resolve_session`] refuses an
+/// unverified user, so an invite on its own opens nothing.
+///
+/// # Errors
+///
+/// Propagates the database error. The caller is expected to have already
+/// decided that this address should get an account; see
+/// [`crate::access::membership_for`] for the check that it does not have one.
+pub async fn attach_person(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    email: &str,
+    account_id: &str,
+) -> ApiResult<String> {
+    // `ON CONFLICT ... DO UPDATE` rather than `DO NOTHING` because `DO NOTHING`
+    // returns no row, and this needs the id whether it inserted or not. The
+    // update is a no-op write of the address the row already has.
+    let user_id: String = sqlx::query_scalar(
+        "INSERT INTO users (id, email) VALUES ($1, $2)
+         ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+         RETURNING id",
+    )
+    .bind(mint_user_id())
+    .bind(email)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO memberships (user_id, account_id, role)
+         VALUES ($1, $2, 'owner')
+         ON CONFLICT (user_id, account_id) DO NOTHING",
+    )
+    .bind(&user_id)
+    .bind(account_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(user_id)
+}
+
+/// An opaque user identifier, shaped like the account identifier beside it.
+fn mint_user_id() -> String {
+    crate::auth::mint_token("usr").replace('_', "")
 }
 
 /// Resolve a session cookie to the person and account it belongs to.

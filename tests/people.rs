@@ -85,6 +85,53 @@ fn session_cookie(headers: &reqwest::header::HeaderMap) -> String {
 }
 
 #[tokio::test]
+async fn an_address_signs_in_however_it_is_capitalised() {
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    // Invited in one capitalisation, as a person types it into a form.
+    invite(&plane, "Person@Example.com").await;
+
+    // Typed back in another, as the same person types it a week later. The
+    // column is CITEXT for exactly this, but a bound parameter is `text` and
+    // Postgres resolves `citext = text` by casting the column down to text,
+    // which is case sensitive. Without an explicit `::citext` on the parameter
+    // this fails in the cruellest way available: the endpoint answers unknown
+    // addresses identically to known ones, so the person is told a code was
+    // sent and waits for mail that was never generated.
+    let (status, body) = request_code(&plane, "person@example.com").await;
+    assert_eq!(status, 200);
+    let code = body["development_code"]
+        .as_str()
+        .expect("a differently cased address must still get a code")
+        .to_owned();
+
+    let (status, headers) = redeem(&plane, "PERSON@EXAMPLE.COM", &code).await;
+    assert_eq!(
+        status, 200,
+        "a code must redeem whatever capitalisation it is presented with"
+    );
+
+    // And the session it produced is a real one.
+    let cookie = session_cookie(&headers);
+    let response = plane
+        .http
+        .get(plane.url("/v1/auth/session"))
+        .header(reqwest::header::COOKIE, &cookie)
+        .send()
+        .await
+        .expect("request reaches the plane");
+    assert_eq!(response.status(), 200);
+    let session = response
+        .json::<serde_json::Value>()
+        .await
+        .expect("a session body");
+    assert_eq!(
+        session["email"], "Person@Example.com",
+        "the address is stored as it was invited, not as it was typed"
+    );
+}
+
+#[tokio::test]
 async fn a_code_becomes_a_session_that_gates_the_account() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
