@@ -1046,3 +1046,176 @@ async fn agreeing_terms_today_does_not_invoice_the_months_before_them() {
         "nothing should have been invoiced: {invoices}"
     );
 }
+
+#[tokio::test]
+async fn the_published_per_event_price_bills_end_to_end() {
+    // The pricing page promises: free under 50,000 metered events a month,
+    // then $0.50 per 10,000. This asserts the plane actually charges that,
+    // through a real close, against a hand-computed figure.
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start_with_env(
+        &db,
+        &[
+            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
+            ("PLANE_STRIPE_ENDPOINT", &endpoint),
+        ],
+    )
+    .await;
+    plane.seed_tenant("acme", "cus_enduser").await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_theaccount"})),
+        )
+        .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({
+                "rate_bps": 0,
+                "floor_micros": 0,
+                "per_event_micros": 50,
+                "included_units": 50_000,
+                "starts_at": start_of_last_month()
+            })),
+        )
+        .await;
+
+    // 60,000 events in a finished period: 10,000 past the allowance.
+    let last_month = chrono::Utc::now()
+        .date_naive()
+        .with_day(1)
+        .expect("the first of this month")
+        .pred_opt()
+        .expect("the last day of last month")
+        .and_hms_opt(12, 0, 0)
+        .expect("midday")
+        .and_utc()
+        .timestamp();
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [{
+                "identifier": "agg-perevent",
+                "customer_id": "cus_enduser",
+                "meter": "mcp_units",
+                "units": 60_000,
+                "timestamp": last_month
+            }]})),
+        )
+        .await;
+
+    eventually("the plane to close and settle the period", || {
+        let plane = &plane;
+        async move {
+            let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+            invoices
+                .as_array()
+                .and_then(|rows| rows.first())
+                .is_some_and(|row| row["settled"] == true)
+        }
+    })
+    .await;
+
+    // 10,000 billable events x 50 millionths = 500,000 micros = $0.50 = 50 cents.
+    assert_eq!(fake.values()[0], 50, "$0.50 is 50 cents");
+
+    let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+    let closed = &invoices.as_array().expect("a list")[0];
+    assert_eq!(closed["charge_micros"], 500_000);
+    assert_eq!(closed["units"], 60_000);
+    assert_eq!(closed["included_units"], 50_000);
+    assert_eq!(closed["per_event_micros"], 50);
+}
+
+#[tokio::test]
+async fn usage_inside_the_free_allowance_is_charged_nothing() {
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start_with_env(
+        &db,
+        &[
+            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
+            ("PLANE_STRIPE_ENDPOINT", &endpoint),
+            ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),
+        ],
+    )
+    .await;
+    plane.seed_tenant("acme", "cus_enduser").await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/billing",
+            Some(json!({"stripe_customer_id": "cus_theaccount"})),
+        )
+        .await;
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/pricing",
+            Some(json!({
+                "rate_bps": 0,
+                "floor_micros": 0,
+                "per_event_micros": 50,
+                "included_units": 50_000,
+                "starts_at": start_of_last_month()
+            })),
+        )
+        .await;
+
+    let last_month = chrono::Utc::now()
+        .date_naive()
+        .with_day(1)
+        .expect("the first of this month")
+        .pred_opt()
+        .expect("the last day of last month")
+        .and_hms_opt(12, 0, 0)
+        .expect("midday")
+        .and_utc()
+        .timestamp();
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [{
+                "identifier": "agg-small",
+                "customer_id": "cus_enduser",
+                "meter": "mcp_units",
+                "units": 20_000,
+                "timestamp": last_month
+            }]})),
+        )
+        .await;
+
+    eventually("the period to close", || {
+        let plane = &plane;
+        async move {
+            let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+            invoices.as_array().is_some_and(|rows| !rows.is_empty())
+        }
+    })
+    .await;
+
+    // A period that comes to nothing settles without being sent: a zero line
+    // is noise in the place people read to answer billing questions.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        fake.values().is_empty(),
+        "a free period must not produce a charge: {:?}",
+        fake.values()
+    );
+
+    let (_, invoices) = plane.admin(Method::GET, "/v1/pricing/invoices", None).await;
+    let closed = &invoices.as_array().expect("a list")[0];
+    assert_eq!(closed["charge_micros"], 0);
+    assert_eq!(closed["units"], 20_000);
+    assert_eq!(closed["settled"], true, "settled without being sent");
+}
