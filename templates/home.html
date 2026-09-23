@@ -1,0 +1,215 @@
+{% extends "base.html" %}
+{% block main %}
+
+<section class="hero">
+  <div class="wrap">
+    <p class="eyebrow">UsageKit Cloud</p>
+    <h1>Bill MCP usage correctly, without operating the billing infrastructure.</h1>
+    <p class="lede">
+      The UsageKit meter is Apache-2.0 and works with no account. Add the Tower layer or run the
+      sidecar and your counts are right today, with nothing reporting to us.
+      UsageKit Cloud is the other half: the durable ledger, the export retries, the dead letter
+      queue, and the period arithmetic you would otherwise build and then carry.
+    </p>
+    <div class="hero-actions">
+      <a class="button" href="#request-access">Request access</a>
+      <a class="button button-quiet" href="https://github.com/pokitappz/mcp-usage-kit">Start with the free meter</a>
+    </div>
+    <p class="hero-foot">
+      No credit card, because there is no self-serve signup. Access is granted by hand while the
+      service is young, and the free meter never requires it.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="micro">The problem, measured</p>
+    <h2>Counting HTTP requests overbills real MCP traffic by 2.98x.</h2>
+    <p class="prose">
+      MCP is not one request per billable unit. A multi round trip call is several requests and one
+      result. Task polling is a dozen requests and one result. A failed call is a request and
+      nothing delivered. Bill per request and the invoice is wrong in the customer's disfavour,
+      which is the expensive direction to be wrong in.
+    </p>
+    <p class="prose">
+      That is a measurable claim, so it is measured. The comparison below runs against the
+      strongest version of a request counter: one that reads <code>Mcp-Name</code> and applies your
+      own price book per request, blind only to what came back.
+    </p>
+
+    <div class="panel">
+      <table class="figures">
+        <caption class="visually-hidden">Identical MCP traffic billed two ways</caption>
+        <thead>
+          <tr>
+            <th scope="col">Scenario</th>
+            <th scope="col" class="numeric">HTTP requests</th>
+            <th scope="col" class="numeric">Correct</th>
+            <th scope="col" class="numeric">Request counting</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Discovery</th><td class="numeric">7</td><td class="numeric">0</td><td class="numeric">7</td></tr>
+          <tr><th scope="row">Multi round trip</th><td class="numeric">8</td><td class="numeric">35</td><td class="numeric">155</td></tr>
+          <tr><th scope="row">Task polling</th><td class="numeric">12</td><td class="numeric">40</td><td class="numeric">80</td></tr>
+          <tr><th scope="row">Errors</th><td class="numeric">9</td><td class="numeric">5</td><td class="numeric">135</td></tr>
+          <tr><th scope="row">Retries</th><td class="numeric">9</td><td class="numeric">72</td><td class="numeric">76</td></tr>
+        </tbody>
+        <tfoot>
+          <tr><th scope="row">Total</th><td class="numeric">45</td><td class="numeric">152</td><td class="numeric">453</td></tr>
+        </tfoot>
+      </table>
+      <p class="panel-foot">
+        Reproduce it yourself, from a clone, in under a minute:
+        <code class="command">cargo run -p mcp-overbilling</code>
+        The harness also contains traffic where request counting is correct, because a comparison
+        built only from cases that favour one answer is not evidence.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap">
+    <p class="micro">What the free meter already does</p>
+    <h2>The counting problem is solved, and it is not ours to sell back to you.</h2>
+    <p class="prose">
+      <code>mcp-usage-kit</code> records usage only after it observes a terminal result. Interim
+      results bill nothing. Task creation and progress polls bill nothing. A completed task bills
+      the originating tool once, keyed on its <code>taskId</code>. Errors, cancellations, discovery
+      and subscription traffic are free. It is Apache-2.0, published on crates.io, and the
+      conformance vectors are machine readable JSON that a gateway in any language can reuse.
+    </p>
+    <p class="prose">
+      If that is all you need, take it and go. It will not phone home, it has no licence key, and
+      nothing here is gated behind an account.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="micro">What UsageKit Cloud is for</p>
+    <h2>Correct counts are the easy half. The other half runs at 3am.</h2>
+    <p class="prose">
+      A meter produces numbers in a process. Turning those numbers into money that arrives, every
+      month, without anyone watching, is a different system. This is that system, and it is what
+      you would otherwise write.
+    </p>
+
+    <div class="grid grid-three">
+      <article class="card">
+        <h3>A ledger that survives the process</h3>
+        <p>
+          Idempotent usage aggregates posted from any number of sidecars, deduplicated on their
+          stable identifiers, in Postgres. Restart a sidecar mid batch and the counts do not move.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Exports that retry, and a queue when they cannot</h3>
+        <p>
+          A provider that is down does not lose a month of revenue. Permanent rejections land in a
+          bounded dead letter queue that is visible in the dashboard, because silently dropped
+          usage is silently dropped money.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Period close, not a per unit drip</h3>
+        <p>
+          Usage is charged once per closed period, in integer micros, with the floor and the
+          included allowance applied in one place. A period cannot be charged twice however often
+          the close runs.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Credentials sealed at rest</h3>
+        <p>
+          Your provider keys are sealed with ChaCha20-Poly1305 before they touch a row, and the
+          export client refuses redirects so a credential cannot be carried to a host nobody
+          reviewed.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Price books per customer</h3>
+        <p>
+          Tenants, their prices, their quotas and their spend caps, served to your sidecars as a
+          snapshot they can cache. Your hot path keeps serving when this service does not.
+        </p>
+      </article>
+      <article class="card">
+        <h3>A dashboard instead of a psql prompt</h3>
+        <p>
+          Usage by customer and meter, quota against limits, what each period was charged, and
+          which exports failed. The numbers on the page are the numbers the API returns.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap narrow-wrap">
+    <p class="micro">How it fits</p>
+    <h2>Three steps, and your hot path does not depend on us.</h2>
+    <ol class="steps">
+      <li>
+        <h3>Meter where your server already is</h3>
+        <p>Add the Tower layer in a Rust MCP server, or run the <code>mcp-usage-edge</code> sidecar in front of a server written in anything else.</p>
+      </li>
+      <li>
+        <h3>Point it at the plane</h3>
+        <p>The sidecar pulls a snapshot of who may call and at what price, and posts idempotent aggregates back. Both directions are pull based and free of session state, so an outage here degrades to the last snapshot rather than to an error.</p>
+      </li>
+      <li>
+        <h3>Connect your provider</h3>
+        <p>The plane closes each period and submits the charge. You watch it in the dashboard rather than in a log.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="section" id="request-access">
+  <div class="wrap narrow-wrap">
+    <p class="micro">Request access</p>
+    <h2>Tell us what you are metering.</h2>
+    <p class="prose">
+      Accounts are provisioned by hand while the service is young. That is a deliberate limit, not a
+      waiting list tactic: it means every account gets looked at by a person before it bills anyone.
+      Expect a reply from a human, not a drip campaign.
+    </p>
+
+    {% match notice %}
+    {% when Some with (message) %}
+    <p class="notice {{ notice_kind }}" role="status">{{ message }}</p>
+    {% when None %}
+    {% endmatch %}
+
+    <form class="form" method="post" action="/request-access">
+      <div class="field">
+        <label for="email">Work email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required maxlength="254" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="company">Company <span class="optional">optional</span></label>
+        <input id="company" name="company" type="text" autocomplete="organization" maxlength="200">
+      </div>
+      <div class="field">
+        <label for="expected_events">Metered events per month, roughly <span class="optional">optional</span></label>
+        <input id="expected_events" name="expected_events" type="number" inputmode="numeric" min="0" step="1" placeholder="50000">
+        <p class="hint">A terminal delivery is one event. It is usually far smaller than your request count, which is the whole point.</p>
+      </div>
+      <div class="field">
+        <label for="note">What are you building? <span class="optional">optional</span></label>
+        <textarea id="note" name="note" rows="4" maxlength="2000"></textarea>
+      </div>
+      <button class="button" type="submit">Request access</button>
+      <p class="hint">
+        We store what you type here and email you about it. Nothing else, and no third party
+        analytics on this page.
+      </p>
+    </form>
+  </div>
+</section>
+
+{% endblock %}

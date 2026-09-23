@@ -214,7 +214,11 @@ fn generate_session_token() -> String {
 ///
 /// The column is `CITEXT`, so case is already handled; this trims and bounds
 /// the length so an unbounded string never reaches the database.
-fn normalize_email(raw: &str) -> ApiResult<String> {
+///
+/// Shared with the access form in [`crate::pages`] rather than reimplemented
+/// there. Two validators for one column drift, and the one that drifts is
+/// always the one guarding the unauthenticated route.
+pub fn normalize_email(raw: &str) -> ApiResult<String> {
     let email = raw.trim();
     let valid = (3..=254).contains(&email.len())
         && email.split('@').count() == 2

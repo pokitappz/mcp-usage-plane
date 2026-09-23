@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block main %}
+
+<section class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Docs</p>
+    <h1>Start with the free meter. Add the plane when you need the operations.</h1>
+    <p class="lede">
+      The reference documentation lives with the code it describes, where it is version checked and
+      cannot drift from what you actually installed. This page is the map.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="micro">Step one, no account needed</p>
+    <h2>Meter your server.</h2>
+    <p class="prose">
+      A Rust MCP server takes the Tower layer directly. Anything else runs behind the sidecar,
+      which fronts a server written in any language and speaks the same contract.
+    </p>
+    <div class="panel">
+      <p class="panel-label">In a Rust server</p>
+      <pre class="code"><code>cargo add mcp-usage-kit</code></pre>
+      <p class="panel-label">In front of any server</p>
+      <pre class="code"><code>cargo install mcp-usage-edge</code></pre>
+      <p class="panel-foot">
+        This is the whole of the free path. It records terminal delivery rather than counting
+        requests, it has no licence key, and it does not report to us.
+      </p>
+    </div>
+
+    <div class="grid grid-three">
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-kit">mcp-usage-kit</a></h3>
+        <p>The public facade and a runnable <code>rmcp</code> example. Start here.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-core">mcp-usage-core</a></h3>
+        <p>Protocol classification, pricing, terminal delivery, task attribution, quota and spend cap decisions. No I/O.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-tower">mcp-usage-tower</a></h3>
+        <p>API key authentication, header and version guards, authorization aware caching, SSE observation, metrics.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-export">mcp-usage-export</a></h3>
+        <p>Synchronous recording, concurrent aggregation, idempotent retry, and a provider neutral meter event exporter.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-store">mcp-usage-store</a></h3>
+        <p>Atomic Redis, Valkey and PostgreSQL task attribution, for servers scaled horizontally.</p>
+      </article>
+      <article class="card">
+        <h3><a href="https://docs.rs/mcp-usage-edge">mcp-usage-edge</a></h3>
+        <p>The metering sidecar. This is the piece that talks to UsageKit Cloud.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap">
+    <p class="micro">Step two, with an account</p>
+    <h2>Point the sidecar at the plane.</h2>
+    <p class="prose">
+      Provisioning hands you two credentials with deliberately different reach. The edge token goes
+      to your sidecars and cannot read or change pricing. The admin token manages tenants, prices
+      and export configuration, and never belongs in a sidecar's environment.
+    </p>
+    <div class="panel">
+      <pre class="code"><code>PLANE_URL=https://usagekit.cloud
+PLANE_EDGE_TOKEN=mup_edge_...</code></pre>
+      <p class="panel-foot">
+        The sidecar pulls a snapshot of who may call and at what price, then posts idempotent usage
+        aggregates back. Both directions are pull based and carry no session state, so if this
+        service is unavailable your hot path keeps serving from the snapshot it already has.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap narrow-wrap">
+    <p class="micro">Reference</p>
+    <dl class="faq">
+      <dt>The billing rule</dt>
+      <dd>Which exchanges produce a billable unit, and which produce nothing. The <a href="/pricing">pricing page</a> has the short version; the <a href="https://github.com/pokitappz/mcp-usage-kit#the-billing-rule">README</a> has it in full.</dd>
+
+      <dt>Conformance vectors</dt>
+      <dd>Versioned JSON cases that pin classification behaviour, independent of Rust, reusable by gateways and servers in other languages. <a href="https://github.com/pokitappz/mcp-usage-kit/blob/main/docs/conformance.md">Read the conformance guide</a>.</dd>
+
+      <dt>Integration contracts</dt>
+      <dd>The wire level shape of what the sidecar sends and expects. <a href="https://github.com/pokitappz/mcp-usage-kit/blob/main/docs/integration-contracts.md">Read the contracts</a>.</dd>
+
+      <dt>The overbilling harness</dt>
+      <dd><code>cargo run -p mcp-overbilling</code> in a clone reproduces the measurement on the home page, including the scenarios where request counting happens to be right.</dd>
+
+      <dt>Changelog and security policy</dt>
+      <dd><a href="https://github.com/pokitappz/mcp-usage-kit/blob/main/CHANGELOG.md">CHANGELOG</a> and <a href="https://github.com/pokitappz/mcp-usage-kit/security/policy">SECURITY</a>, both in the open repository.</dd>
+    </dl>
+  </div>
+</section>
+
+{% endblock %}

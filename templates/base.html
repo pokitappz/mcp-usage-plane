@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ shell.title }}</title>
+<meta name="description" content="{{ shell.description }}">
+<meta name="robots" content="{{ shell.robots }}">
+<link rel="canonical" href="{{ shell.canonical }}">
+<link rel="stylesheet" href="/assets/usagekit.css">
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:title" content="{{ shell.title }}">
+<meta property="og:description" content="{{ shell.description }}">
+<meta property="og:url" content="{{ shell.canonical }}">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead-inner">
+    <a class="wordmark" href="/">
+      <span class="wordmark-name">UsageKit</span><span class="wordmark-suffix">Cloud</span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="/pricing"{% if shell.nav == "/pricing" %} aria-current="page"{% endif %}>Pricing</a>
+      <a href="/security"{% if shell.nav == "/security" %} aria-current="page"{% endif %}>Security</a>
+      <a href="/docs"{% if shell.nav == "/docs" %} aria-current="page"{% endif %}>Docs</a>
+      <a href="/app">Sign in</a>
+      <a class="nav-cta" href="/#request-access">Request access</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+{% block main %}{% endblock %}
+</main>
+
+<footer class="footer">
+  <div class="wrap footer-inner">
+    <div class="footer-block">
+      <p class="footer-name">UsageKit Cloud</p>
+      <p class="footer-note">The hosted control plane for the UsageKit meter. The meter itself is Apache-2.0 and runs without it.</p>
+    </div>
+    <div class="footer-block">
+      <p class="micro">Product</p>
+      <ul class="plain">
+        <li><a href="/pricing">Pricing</a></li>
+        <li><a href="/security">Security</a></li>
+        <li><a href="/docs">Docs</a></li>
+      </ul>
+    </div>
+    <div class="footer-block">
+      <p class="micro">Open source</p>
+      <ul class="plain">
+        <li><a href="https://github.com/pokitappz/mcp-usage-kit">Source on GitHub</a></li>
+        <li><a href="https://docs.rs/mcp-usage-kit">API documentation</a></li>
+        <li><a href="https://crates.io/crates/mcp-usage-kit">crates.io</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

@@ -26,6 +26,15 @@ const FROM_EMAIL: &str = "support@pokitapps.com";
 const FROM_NAME: &str = "UsageKit";
 const SIGN_IN_SUBJECT: &str = "Your UsageKit sign-in code";
 
+/// Where an access request is announced.
+///
+/// The operator, not the person who asked: access is granted by hand, so this
+/// is the only thing that moves a queued row in front of somebody. The visitor
+/// gets their confirmation from the page, which is already rendered by the time
+/// this is attempted.
+const OPERATOR_EMAIL: &str = "support@pokitapps.com";
+const ACCESS_SUBJECT: &str = "UsageKit Cloud access request";
+
 /// Why a message could not be sent. Never carries message content.
 #[derive(Debug, thiserror::Error)]
 pub enum EmailError {
@@ -156,11 +165,67 @@ impl EmailClient {
             ),
         };
 
+        self.deliver(&message).await
+    }
+
+    /// Tell the operator that somebody asked for access.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`EmailError`] category. The caller treats a failure as
+    /// non-fatal: the request is already recorded, and losing the notification
+    /// delays a reply rather than losing the lead.
+    pub async fn send_access_request(
+        &self,
+        from_address: &str,
+        company: Option<&str>,
+        expected_events: Option<i64>,
+        note: Option<&str>,
+    ) -> Result<(), EmailError> {
+        let company = company.unwrap_or("not given");
+        let expected =
+            expected_events.map_or_else(|| "not given".to_owned(), |value| value.to_string());
+        let note = note.unwrap_or("none");
+
+        let message = Message {
+            from_name: FROM_NAME,
+            from_email: FROM_EMAIL,
+            to: vec![Recipient {
+                email: OPERATOR_EMAIL,
+            }],
+            subject: ACCESS_SUBJECT,
+            text_content: format!(
+                "Access request\n\n\
+                 Email: {from_address}\n\
+                 Company: {company}\n\
+                 Expected metered events per month: {expected}\n\n\
+                 Note:\n{note}\n"
+            ),
+            // Every interpolated value here was typed by an anonymous visitor,
+            // so all four are escaped. The text part carries the same content
+            // without markup, which is what a mail client that refuses HTML
+            // will show.
+            html_content: format!(
+                "<p><strong>Access request</strong></p>\
+                 <p>Email: {}<br>Company: {}<br>Expected metered events per month: {}</p>\
+                 <p>Note:<br>{}</p>",
+                escape_html(from_address),
+                escape_html(company),
+                escape_html(&expected),
+                escape_html(note)
+            ),
+        };
+
+        self.deliver(&message).await
+    }
+
+    /// Post one message and insist the service actually queued it.
+    async fn deliver(&self, message: &Message<'_>) -> Result<(), EmailError> {
         let response = self
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.token)
-            .json(&message)
+            .json(message)
             .send()
             .await
             .map_err(|error| {

@@ -101,11 +101,57 @@ jobs:
         run: cargo +stable deny --all-features check
 
   image:
-    name: Container image builds
+    name: Container image builds and serves
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.2@sha256:3267c505060a0052e5aa6e5175a7b41ab6b04da2f8c4540fc6e98a37210aa2d3
+        env:
+          POSTGRES_USER: plane
+          POSTGRES_PASSWORD: plane
+          POSTGRES_DB: plane
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U plane"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The deployed artifact is the image, not `cargo build`. A Dockerfile that
       # stopped building would otherwise be discovered at deploy time.
       - name: Build the deployment image
         run: docker build --tag mcp-usage-plane:ci .
+
+      # Building is not enough. The templates are compiled in, so a missing
+      # `templates/` fails the build loudly, but `static/` is read from disk at
+      # request time and `ServeDir` resolves it against the working directory.
+      # Leaving it out of the image produces a container that builds, starts,
+      # passes a health check, and serves every page unstyled. This is the only
+      # place that failure is visible before a customer sees it.
+      - name: Serve a page and an asset from the image
+        run: |
+          set -euo pipefail
+          docker run --detach --name plane --network host \
+            --env DATABASE_URL=postgres://plane:plane@127.0.0.1:5432/plane \
+            --env APP_PUBLIC_URL=http://localhost:8081 \
+            mcp-usage-plane:ci
+
+          for _ in $(seq 1 60); do
+            if curl --silent --fail --max-time 2 http://localhost:8081/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          # `--fail` turns a 404 into a non-zero exit, which is the whole point:
+          # a missing stylesheet must fail the job rather than be logged.
+          curl --silent --fail --max-time 5 http://localhost:8081/ \
+            | grep --quiet 'UsageKit'
+          curl --silent --fail --max-time 5 http://localhost:8081/assets/usagekit.css \
+            | grep --quiet -- '--accent'
+
+      - name: Show the container log on failure
+        if: failure()
+        run: docker logs plane || true

@@ -16,6 +16,7 @@ mod edge;
 mod email;
 mod error;
 mod export;
+mod pages;
 mod people;
 mod pricing;
 mod providers;
@@ -24,6 +25,7 @@ mod tenants;
 mod throttle;
 mod tokens;
 mod usage;
+mod web;
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -142,27 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         health: std::sync::Arc::new(throttle::HealthProbe::default()),
         admission: std::sync::Arc::new(throttle::Admission::default()),
     };
-    let app = Router::new()
-        .route("/healthz", routing::get(healthz))
-        .merge(tenants::router())
-        .merge(usage::router())
-        .merge(edge::router())
-        .merge(export::router())
-        .merge(billing::router())
-        .merge(tokens::router())
-        .merge(pricing::router())
-        .merge(people::router())
-        .merge(accounts::router())
-        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
-        // Outermost, so it also bounds a client that is slow to send its body.
-        // Without it a trickling request holds a pool connection for as long as
-        // it likes, which is the cheapest way to exhaust the pool.
-        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
-            axum::http::StatusCode::REQUEST_TIMEOUT,
-            REQUEST_TIMEOUT,
-        ))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(state.clone());
+    let app = build_router(state.clone());
 
     let drain_interval = Duration::from_secs(
         std::env::var("EXPORT_DRAIN_INTERVAL_SECONDS")
@@ -197,6 +179,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Assemble every route and the layers that wrap them.
+///
+/// Separate from `main` so the order is readable in one screen. The order is
+/// load bearing: body limit inside the timeout, timeout inside the trace, and
+/// the response policy outermost so nothing can serve a page without it.
+fn build_router(state: AppState) -> Router {
+    Router::new()
+        .route("/healthz", routing::get(healthz))
+        .merge(tenants::router())
+        .merge(usage::router())
+        .merge(edge::router())
+        .merge(export::router())
+        .merge(billing::router())
+        .merge(tokens::router())
+        .merge(pricing::router())
+        .merge(people::router())
+        .merge(accounts::router())
+        .merge(pages::router())
+        // `ServeDir` resolves against the process working directory rather than
+        // the crate root, which is why the Dockerfile copies `static/` next to
+        // the binary. Getting this wrong fails only in the container, where
+        // local development looks fine and production serves an unstyled page.
+        .nest_service(
+            "/assets",
+            tower_http::services::ServeDir::new(assets_dir()).precompressed_gzip(),
+        )
+        .fallback(pages::not_found)
+        .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
+        // Outermost, so it also bounds a client that is slow to send its body.
+        // Without it a trickling request holds a pool connection for as long as
+        // it likes, which is the cheapest way to exhaust the pool.
+        .layer(tower_http::timeout::TimeoutLayer::with_status_code(
+            axum::http::StatusCode::REQUEST_TIMEOUT,
+            REQUEST_TIMEOUT,
+        ))
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        // Outside every route, so a handler cannot forget a security header or
+        // opt out of the content security policy by setting its own.
+        .layer(axum::middleware::from_fn(web::response_policy))
+        .with_state(state)
+}
+
 /// The public origin, validated.
 ///
 /// Load bearing for browser security rather than cosmetic: it decides whether
@@ -220,6 +244,15 @@ fn public_url_from_env() -> Result<Option<String>, Box<dyn std::error::Error>> {
         ),
     }
     Ok(public_url)
+}
+
+/// Where the stylesheet and the icon are served from.
+///
+/// Overridable because the working directory is not the same in a container, in
+/// `cargo run`, and under `cargo test`, and a stylesheet that silently 404s
+/// looks like a broken deployment rather than a misconfiguration.
+fn assets_dir() -> String {
+    std::env::var("ASSETS_DIR").unwrap_or_else(|_| "./static/assets".to_owned())
 }
 
 /// Liveness. Deliberately touches the database: a plane that cannot reach

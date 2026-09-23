@@ -18,9 +18,19 @@ publish = false
 mcp-usage-core = "0.4.0"
 mcp-usage-export = "0.4.0"
 
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+# `form` is for the landing page: the request-access and dashboard forms are
+# real HTML posts rather than fetches, so they work with JavaScript disabled.
+axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-tower-http = { version = "0.6.8", default-features = false, features = ["limit", "timeout", "trace"] }
+# `fs` serves the stylesheet. Note that `ServeDir` resolves against the process
+# working directory, not the crate root, which is why the Dockerfile copies
+# `static/` next to the binary.
+tower-http = { version = "0.6.8", default-features = false, features = ["fs", "limit", "timeout", "trace"] }
+
+# Compile-time HTML templates: a typo in a template is a build failure rather
+# than a 500 in front of a customer, and there is no runtime template loading to
+# get wrong in a container.
+askama = "0.16"
 
 sqlx = { package = "plane-sqlx-postgres", path = "sqlx-postgres-only" }
 
@@ -50,7 +60,7 @@ tracing-subscriber = { version = "0.3.20", default-features = false, features = 
 
 [dev-dependencies]
 tokio-test = "0.4"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "0.8.9", default-features = false, features = ["form", "http1", "json", "query", "tokio"] }
 
 [profile.release]
 lto = "fat"

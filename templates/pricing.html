@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block main %}
+
+<section class="page-head">
+  <div class="wrap">
+    <p class="eyebrow">Pricing</p>
+    <h1>$0.50 per 10,000 metered events. Free under 50,000 a month.</h1>
+    <p class="lede">
+      One price, charged on the thing the product exists to count. No per seat fee, no platform
+      fee, no charge for the open source meter, and nothing to negotiate before you can start.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="panel panel-price">
+      <div class="price-head">
+        <p class="micro">UsageKit Cloud</p>
+        <p class="price"><span class="price-figure">$0.50</span> <span class="price-unit">per 10,000 metered events</span></p>
+        <p class="price-note">The first 50,000 metered events each month are free. Every account, every month, not a trial.</p>
+      </div>
+      <ul class="ticks">
+        <li>Durable usage ledger with idempotent ingest</li>
+        <li>Per customer price books, quotas and spend caps</li>
+        <li>Provider exports with retry and a visible dead letter queue</li>
+        <li>Monthly period close and invoice history</li>
+        <li>Dashboard, API tokens and scoped sidecar credentials</li>
+        <li>Billing credentials sealed at rest</li>
+      </ul>
+      <a class="button" href="/#request-access">Request access</a>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap">
+    <p class="micro">The unit</p>
+    <h2>A metered event is one terminal delivery, not one HTTP request.</h2>
+    <p class="prose">
+      This matters more than the number beside it, because it is the difference between a bill you
+      can forecast and one that tracks your retry behaviour. The meter records an event only when
+      it observes a result actually delivered.
+    </p>
+    <div class="panel">
+      <table class="figures">
+        <caption class="visually-hidden">What counts as a metered event</caption>
+        <thead>
+          <tr><th scope="col">Exchange</th><th scope="col" class="numeric">Metered events</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">A tool call that completes</th><td class="numeric">1</td></tr>
+          <tr><th scope="row">A completed task, however many polls it took</th><td class="numeric">1</td></tr>
+          <tr><th scope="row">An interim multi round trip result</th><td class="numeric">0</td></tr>
+          <tr><th scope="row">Task creation and progress polls</th><td class="numeric">0</td></tr>
+          <tr><th scope="row">A failed, cancelled or errored call</th><td class="numeric">0</td></tr>
+          <tr><th scope="row">Discovery and subscription traffic</th><td class="numeric">0</td></tr>
+        </tbody>
+      </table>
+      <p class="panel-foot">
+        In the measured comparison on the <a href="/">home page</a>, 45 HTTP requests produce 152
+        billable units and 0 metered events for everything that failed. Your event count is
+        normally a fraction of your request count.
+      </p>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="micro">Worked examples</p>
+    <h2>What it actually costs.</h2>
+    <div class="panel">
+      <table class="figures">
+        <caption class="visually-hidden">Monthly cost at three volumes</caption>
+        <thead>
+          <tr>
+            <th scope="col">Metered events in a month</th>
+            <th scope="col" class="numeric">Billable after the free 50,000</th>
+            <th scope="col" class="numeric">You pay</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">40,000</th><td class="numeric">0</td><td class="numeric">$0.00</td></tr>
+          <tr><th scope="row">250,000</th><td class="numeric">200,000</td><td class="numeric">$10.00</td></tr>
+          <tr><th scope="row">1,000,000</th><td class="numeric">950,000</td><td class="numeric">$47.50</td></tr>
+        </tbody>
+      </table>
+      <p class="panel-foot">
+        Above one million events a month the per event rate comes down. That one is negotiated
+        rather than published, because at that size the interesting questions are residency and
+        retention, not the rate.
+      </p>
+    </div>
+
+    <p class="prose">
+      For scale: if you charge your own customers two cents per delivered tool call and you deliver
+      250,000 of them, you invoice $5,000 and this costs you $10. The meter is there so that
+      $5,000 is the right number.
+    </p>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap narrow-wrap">
+    <p class="micro">The fine print, in plain words</p>
+    <dl class="faq">
+      <dt>Is the meter itself free?</dt>
+      <dd>Yes, permanently. <code>mcp-usage-kit</code> and the <code>mcp-usage-edge</code> sidecar are Apache-2.0 on crates.io. They have no licence key, they do not report to us, and they work with no account. You are paying here for the hosted plane, and only if you want one.</dd>
+
+      <dt>What happens when I cross 50,000?</dt>
+      <dd>Events beyond the allowance are charged at the published rate. The allowance resets each month and applies to every account, so a month under 50,000 costs nothing even if last month did not.</dd>
+
+      <dt>How is it charged?</dt>
+      <dd>Once per closed month, not as a continuous drip. Each invoice records the terms it applied rather than pointing at your current terms, so a later price change never restates a bill you already received.</dd>
+
+      <dt>Do you meter my customers' data?</dt>
+      <dd>No. The ledger stores counts against opaque identifiers you choose. Tool names, prompt names and resource URIs never leave your server, by construction rather than by policy. See <a href="/security">Security</a>.</dd>
+
+      <dt>What if I want to leave?</dt>
+      <dd>Keep running the meter, which was never ours to take away, and point it somewhere else. The usage ledger is exportable and the integration contract is public, so nothing about this arrangement depends on it being hard to walk away from.</dd>
+    </dl>
+  </div>
+</section>
+
+{% endblock %}
