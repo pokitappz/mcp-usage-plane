@@ -72,6 +72,53 @@ prices.
 Revocation is absence: a revoked tenant or key simply stops appearing in the
 snapshot, and the sidecar cannot authenticate a key it was never given.
 
+## Pages
+
+The same process serves the public site and the dashboard. Templates are
+compiled into the binary by Askama, so a broken page is a failed build; the
+stylesheet is read from disk at `ASSETS_DIR`, which the Dockerfile sets
+explicitly because `ServeDir` resolves a relative path against the working
+directory rather than the crate root.
+
+| Route | Who | Purpose |
+|---|---|---|
+| `GET /` | anyone | The measurement, the positioning, and the access form |
+| `GET /pricing` | anyone | $0.50 per 10,000 metered events, free under 50,000 |
+| `GET /security` | anyone | What is stored, what is sealed, and what is not done yet |
+| `GET /docs` | anyone | Pointers to the Apache-2.0 crates and the contracts |
+| `POST /request-access` | anyone | Queue an access request. Origin-checked and rate limited |
+| `GET /signin` | anyone | Ask for a sign-in code |
+| `POST /signin` | anyone | Send one, then show the code form |
+| `POST /signin/verify` | anyone | Redeem a code and open a session |
+| `POST /signout` | anyone | End the session and clear the cookie |
+| `GET /app` | session | The dashboard. Anonymous gets a redirect, never markup |
+| `POST /app/tokens` | session | Mint an account credential, shown once on the page |
+| `POST /app/tokens/{digest}/revoke` | session | Revoke one |
+| `POST /app/tenants/{key}/keys` | session | Mint a tenant key, shown once on the page |
+| `POST /app/dead-letters/{id}/resolve` | session | Mark one reconciled |
+
+Three properties hold across all of them.
+
+**The dashboard is gated by the server.** An anonymous request to `/app` gets a
+redirect and an empty body, not the shell with a client-side bounce. The panel
+names, routes and structure are not public.
+
+**Nothing inline.** Every response carries a content security policy with no
+`unsafe-inline` and no `unsafe-eval`, for scripts and for styles. There is no
+JavaScript at all: every action is a form post that redirects, and the
+`SameSite=Lax` cookie plus an `Origin` check that fails closed is the whole CSRF
+story. A test renders every page and fails the build on an inline script, style
+or handler.
+
+**A minted credential is rendered, never redirected with.** A redirect would
+have to carry it in a query string, which puts it in browser history, in proxy
+logs and in the next request's referrer.
+
+Page handlers call the same functions the JSON handlers call rather than a
+second copy of the SQL, and a test asserts the figures on the page match the
+figures `GET /v1/usage` returns. Two copies of a billing query drift, and the
+one that drifts silently is the one a customer is reading.
+
 ## Two kinds of caller
 
 Machines present a bearer token. People present a session cookie. They are

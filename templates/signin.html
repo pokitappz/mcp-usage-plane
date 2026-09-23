@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block main %}
+<section class="page-head page-head-tall">
+  <div class="wrap narrow-wrap">
+    <p class="eyebrow">Sign in</p>
+    <h1>No password to remember.</h1>
+    <p class="lede">
+      Enter the address your account was created with and we will email you a code. It is good for
+      ten minutes and can be used once.
+    </p>
+
+    {% match notice %}
+    {% when Some with (message) %}
+    <p class="notice {{ notice_kind }}" role="status">{{ message }}</p>
+    {% when None %}
+    {% endmatch %}
+
+    <form class="form" method="post" action="/signin">
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" name="email" type="email" autocomplete="email" required
+               maxlength="254" spellcheck="false" autofocus>
+      </div>
+      <button class="button" type="submit">Email me a code</button>
+    </form>
+
+    <p class="hint">
+      Accounts are created by hand. If you do not have one,
+      <a href="/#request-access">request access</a> and a person will read it.
+    </p>
+  </div>
+</section>
+{% endblock %}

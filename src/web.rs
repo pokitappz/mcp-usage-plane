@@ -44,7 +44,15 @@ base-uri 'self'";
 /// cache holding that page would serve it to the next person through the same
 /// proxy.
 fn is_private(path: &str) -> bool {
-    path == "/app" || path.starts_with("/app/") || path.starts_with("/v1/") || path == "/healthz"
+    path == "/app"
+        || path.starts_with("/app/")
+        // The sign-in pages carry an address in a form field and, on the code
+        // step, a code. Neither belongs in a shared cache or an index.
+        || path == "/signin"
+        || path.starts_with("/signin/")
+        || path == "/signout"
+        || path.starts_with("/v1/")
+        || path == "/healthz"
 }
 
 /// Apply the response policy.

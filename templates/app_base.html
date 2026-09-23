@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ shell.title }}</title>
+<meta name="description" content="{{ shell.description }}">
+<meta name="robots" content="{{ shell.robots }}">
+<link rel="stylesheet" href="/assets/usagekit.css">
+<link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+<meta name="color-scheme" content="light dark">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wide-wrap masthead-inner">
+    <a class="wordmark" href="/">
+      <span class="wordmark-name">UsageKit</span><span class="wordmark-suffix">Cloud</span>
+    </a>
+    <div class="account-bar">
+      <span class="account-name">{{ account_name }}</span>
+      <span class="account-email">{{ user_email }}</span>
+      <form method="post" action="/signout" class="inline-form">
+        <button class="link-button" type="submit">Sign out</button>
+      </form>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+{% block main %}{% endblock %}
+</main>
+</body>
+</html>

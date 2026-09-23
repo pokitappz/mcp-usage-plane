@@ -83,8 +83,30 @@ async fn mint(
     AdminCaller(caller): AdminCaller,
     Json(body): Json<MintToken>,
 ) -> ApiResult<Json<MintedToken>> {
-    let scope = parse_scope(&body.scope)?;
-    let label = body.label.unwrap_or_else(|| "default".to_owned());
+    mint_for(&state, &caller.account_id, &body.scope, body.label)
+        .await
+        .map(Json)
+}
+
+/// Mint a credential, without deciding who asked.
+///
+/// The plaintext is in the return value and nowhere else: it is never written
+/// to a row, never logged, and never recoverable. A caller that loses it mints
+/// another.
+///
+/// # Errors
+///
+/// Rejects an unknown scope and an empty or over-long label.
+pub async fn mint_for(
+    state: &AppState,
+    account_id: &str,
+    raw_scope: &str,
+    raw_label: Option<String>,
+) -> ApiResult<MintedToken> {
+    let scope = parse_scope(raw_scope)?;
+    // Absent means "default"; present but blank is a mistake worth reporting,
+    // which is the distinction the JSON API has always drawn.
+    let label = raw_label.unwrap_or_else(|| "default".to_owned());
     if label.trim().is_empty() || label.len() > MAX_LABEL {
         return Err(ApiError::BadRequest(format!(
             "label must be 1..={MAX_LABEL} characters"
@@ -104,37 +126,38 @@ async fn mint(
          VALUES ($1, $2, $3, $4)",
     )
     .bind(&token_sha256)
-    .bind(&caller.account_id)
-    .bind(body.scope.as_str())
+    .bind(account_id)
+    .bind(raw_scope)
     .bind(&label)
     .execute(&state.pool)
     .await?;
 
-    tracing::info!(
-        account_id = %caller.account_id,
-        scope = %body.scope,
-        "minted an account token"
-    );
+    tracing::info!(account_id, scope = raw_scope, "minted an account token");
 
-    Ok(Json(MintedToken {
+    Ok(MintedToken {
         token,
         token_sha256,
-        scope: body.scope,
+        scope: raw_scope.to_owned(),
         label,
-    }))
+    })
 }
 
 async fn list(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Vec<TokenRow>>> {
+    list_all(&state, &caller.account_id).await.map(Json)
+}
+
+/// Every token on an account, live and revoked, without deciding who asked.
+pub async fn list_all(state: &AppState, account_id: &str) -> ApiResult<Vec<TokenRow>> {
     let rows = sqlx::query(
         "SELECT token_sha256, scope, label, created_at, revoked_at
          FROM account_tokens
          WHERE account_id = $1
          ORDER BY created_at DESC, token_sha256",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -148,8 +171,7 @@ async fn list(
                 revoked_at: row.try_get("revoked_at")?,
             })
         })
-        .collect::<ApiResult<Vec<_>>>()
-        .map(Json)
+        .collect()
 }
 
 async fn revoke(
@@ -157,13 +179,24 @@ async fn revoke(
     AdminCaller(caller): AdminCaller,
     Path(token_sha256): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    revoke_for(&state, &caller.account_id, &token_sha256).await?;
+    Ok(Json(serde_json::json!({ "revoked": true })))
+}
+
+/// Revoke a credential, without deciding who asked.
+///
+/// # Errors
+///
+/// Refuses to revoke the last live admin token, and answers `not found` for a
+/// digest that is not this account's or is already revoked.
+pub async fn revoke_for(state: &AppState, account_id: &str, token_sha256: &str) -> ApiResult<()> {
     // Revoking the last live admin credential locks the account out of its own
     // API, and the only way back is database access. Refuse, and say why.
     let live_admins: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM account_tokens
          WHERE account_id = $1 AND scope = 'admin' AND revoked_at IS NULL",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_one(&state.pool)
     .await?;
 
@@ -172,8 +205,8 @@ async fn revoke(
                        WHERE account_id = $1 AND token_sha256 = $2
                          AND scope = 'admin' AND revoked_at IS NULL)",
     )
-    .bind(&caller.account_id)
-    .bind(&token_sha256)
+    .bind(account_id)
+    .bind(token_sha256)
     .fetch_one(&state.pool)
     .await?;
 
@@ -187,8 +220,8 @@ async fn revoke(
         "UPDATE account_tokens SET revoked_at = NOW()
          WHERE account_id = $1 AND token_sha256 = $2 AND revoked_at IS NULL",
     )
-    .bind(&caller.account_id)
-    .bind(&token_sha256)
+    .bind(account_id)
+    .bind(token_sha256)
     .execute(&state.pool)
     .await?;
 
@@ -199,13 +232,10 @@ async fn revoke(
     // The authentication cache is a revocation window. Dropping the entry makes
     // this immediate on the instance that served the request; any other
     // instance still waits out the TTL, which is why the TTL is short.
-    state.admission.forget(&token_sha256);
+    state.admission.forget(token_sha256);
 
-    tracing::info!(
-        account_id = %caller.account_id,
-        "revoked an account token"
-    );
-    Ok(Json(serde_json::json!({ "revoked": true })))
+    tracing::info!(account_id, "revoked an account token");
+    Ok(())
 }
 
 #[cfg(test)]

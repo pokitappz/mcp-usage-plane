@@ -212,16 +212,25 @@ async fn read(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Pricing>> {
+    read_terms(&state, &caller.account_id).await.map(Json)
+}
+
+/// The terms an account is on, without deciding who asked.
+///
+/// Split from the handler so the dashboard shows the same terms the API
+/// reports. An account with no row is on no terms, which is not the same as
+/// being on zero terms: see the `None` arm.
+pub async fn read_terms(state: &AppState, account_id: &str) -> ApiResult<Pricing> {
     let row = sqlx::query(
         "SELECT rate_bps, floor_micros, per_event_micros, included_units,
                 starts_at, ends_at
          FROM plane_pricing WHERE account_id = $1",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_optional(&state.pool)
     .await?;
 
-    Ok(Json(match row {
+    Ok(match row {
         Some(row) => Pricing {
             rate_bps: row.try_get("rate_bps")?,
             floor_micros: row.try_get("floor_micros")?,
@@ -240,7 +249,7 @@ async fn read(
             starts_at: Utc::now(),
             ends_at: None,
         },
-    }))
+    })
 }
 
 async fn write(
@@ -296,6 +305,11 @@ async fn invoices(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Vec<Invoice>>> {
+    invoice_rows(&state, &caller.account_id).await.map(Json)
+}
+
+/// Closed periods and what each was charged, without deciding who asked.
+pub async fn invoice_rows(state: &AppState, account_id: &str) -> ApiResult<Vec<Invoice>> {
     let rows = sqlx::query(
         "SELECT period_start, period_end, revenue_micros, units, rate_bps,
                 floor_micros, per_event_micros, included_units,
@@ -305,7 +319,7 @@ async fn invoices(
          ORDER BY period_start DESC
          LIMIT 120",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -325,8 +339,7 @@ async fn invoices(
                 settled: settled_at.is_some(),
             })
         })
-        .collect::<ApiResult<Vec<_>>>()
-        .map(Json)
+        .collect()
 }
 
 // ------------------------------------------------------------------ close

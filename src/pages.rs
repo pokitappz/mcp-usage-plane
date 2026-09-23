@@ -68,7 +68,13 @@ pub struct Shell {
 }
 
 impl Shell {
-    fn new(state: &AppState, path: &'static str, title: &str, description: &'static str) -> Self {
+    /// A public, indexable page.
+    pub fn new(
+        state: &AppState,
+        path: &'static str,
+        title: &str,
+        description: &'static str,
+    ) -> Self {
         let base = state.public_url.as_deref().unwrap_or(DEV_BASE_URL);
         Self {
             title: format!("{title} | UsageKit Cloud"),
@@ -76,6 +82,24 @@ impl Shell {
             canonical: format!("{base}{path}"),
             robots: "index,follow",
             nav: path,
+        }
+    }
+
+    /// A page behind a session.
+    ///
+    /// `noindex, nofollow` in the markup as well as the header, because the two
+    /// are read by different things and a dashboard should be absent from a
+    /// search index whichever one is consulted. The middleware also serves
+    /// these `no-store`.
+    pub fn private(
+        state: &AppState,
+        path: &'static str,
+        title: &str,
+        description: &'static str,
+    ) -> Self {
+        Self {
+            robots: "noindex,nofollow",
+            ..Self::new(state, path, title, description)
         }
     }
 }

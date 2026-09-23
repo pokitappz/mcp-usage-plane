@@ -108,6 +108,21 @@ async fn rollup(
     AdminCaller(caller): AdminCaller,
     Query(params): Query<RollupQuery>,
 ) -> ApiResult<Json<Vec<RollupRow>>> {
+    rollup_rows(&state, &caller.account_id, &params)
+        .await
+        .map(Json)
+}
+
+/// The rollup, without deciding who asked for it.
+///
+/// Split from the handler so the dashboard renders the same figures the API
+/// returns, from the same query. The alternative was a second copy of this SQL
+/// behind a session extractor, and two copies of a billing query drift.
+pub async fn rollup_rows(
+    state: &AppState,
+    account_id: &str,
+    params: &RollupQuery,
+) -> ApiResult<Vec<RollupRow>> {
     if let (Some(from), Some(to)) = (params.from, params.to)
         && from > to
     {
@@ -135,7 +150,7 @@ async fn rollup(
     let limit = params.limit.unwrap_or(MAX_ROLLUP_ROWS).min(MAX_ROLLUP_ROWS);
 
     let rows = sqlx::query(&sql)
-        .bind(&caller.account_id)
+        .bind(account_id)
         .bind(params.from)
         .bind(params.to)
         .bind(params.customer_id.as_deref())
@@ -153,14 +168,18 @@ async fn rollup(
                 events: row.try_get("events")?,
             })
         })
-        .collect::<ApiResult<Vec<_>>>()
-        .map(Json)
+        .collect()
 }
 
 async fn quota(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Vec<QuotaRow>>> {
+    quota_rows(&state, &caller.account_id).await.map(Json)
+}
+
+/// Quota status per billing customer. See [`rollup_rows`] for why this is split.
+pub async fn quota_rows(state: &AppState, account_id: &str) -> ApiResult<Vec<QuotaRow>> {
     let rows = sqlx::query(
         "SELECT t.billing_customer_id,
                 MAX(t.max_units) AS max_units,
@@ -177,7 +196,7 @@ async fn quota(
          GROUP BY t.billing_customer_id
          ORDER BY t.billing_customer_id",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -222,7 +241,7 @@ async fn quota(
             },
         });
     }
-    Ok(Json(out))
+    Ok(out)
 }
 
 #[cfg(test)]

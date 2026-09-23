@@ -190,16 +190,20 @@ async fn list(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Vec<TenantView>>> {
+    list_all(&state, &caller.account_id).await.map(Json)
+}
+
+/// Every live tenant on an account, without deciding who asked.
+///
+/// Split from the handler so the dashboard and the API answer from one query.
+pub async fn list_all(state: &AppState, account_id: &str) -> ApiResult<Vec<TenantView>> {
     let rows = sqlx::query(&format!(
         "{TENANT_SELECT} WHERE t.account_id = $1 ORDER BY t.tenant_key"
     ))
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_all(&state.pool)
     .await?;
-    rows.iter()
-        .map(row_to_view)
-        .collect::<ApiResult<_>>()
-        .map(Json)
+    rows.iter().map(row_to_view).collect()
 }
 
 async fn update(
@@ -279,10 +283,29 @@ async fn mint_key(
     body: Option<Json<MintKey>>,
 ) -> ApiResult<Json<MintedKey>> {
     let label = body.map_or_else(default_label, |Json(body)| body.label);
+    mint_key_for(&state, &caller.account_id, &tenant_key, label)
+        .await
+        .map(Json)
+}
+
+/// Mint a tenant API key, without deciding who asked.
+///
+/// The plaintext is in the return value and nowhere else. See
+/// [`crate::tokens::mint_for`].
+///
+/// # Errors
+///
+/// Answers `not found` for a tenant that is not this account's.
+pub async fn mint_key_for(
+    state: &AppState,
+    account_id: &str,
+    tenant_key: &str,
+    label: String,
+) -> ApiResult<MintedKey> {
     let tenant_id: i64 =
         sqlx::query_scalar("SELECT id FROM tenants WHERE account_id = $1 AND tenant_key = $2")
-            .bind(&caller.account_id)
-            .bind(&tenant_key)
+            .bind(account_id)
+            .bind(tenant_key)
             .fetch_optional(&state.pool)
             .await?
             .ok_or(ApiError::NotFound)?;
@@ -296,11 +319,11 @@ async fn mint_key(
         .execute(&state.pool)
         .await?;
 
-    Ok(Json(MintedKey {
+    Ok(MintedKey {
         api_key,
         key_sha256,
         label,
-    }))
+    })
 }
 
 async fn revoke_key(

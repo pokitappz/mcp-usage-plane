@@ -638,7 +638,8 @@ async fn get_destination(
     destination_view(&state, &caller.account_id).await.map(Json)
 }
 
-async fn destination_view(state: &AppState, account_id: &str) -> ApiResult<DestinationView> {
+/// The configured destination and its backlog, without deciding who asked.
+pub async fn destination_view(state: &AppState, account_id: &str) -> ApiResult<DestinationView> {
     let row = sqlx::query(
         "SELECT kind, secret_sealed IS NOT NULL AS has_secret, meter_name, endpoint
          FROM export_destinations WHERE account_id = $1",
@@ -685,6 +686,18 @@ async fn list_dead_letters(
     State(state): State<AppState>,
     AdminCaller(caller): AdminCaller,
 ) -> ApiResult<Json<Vec<DeadLetterView>>> {
+    dead_letter_rows(&state, &caller.account_id).await.map(Json)
+}
+
+/// Aggregates awaiting reconciliation, without deciding who asked.
+///
+/// A nonzero count here is usage that was metered and never delivered, which
+/// is money, so the dashboard shows these rather than burying them behind an
+/// API call nobody makes.
+pub async fn dead_letter_rows(
+    state: &AppState,
+    account_id: &str,
+) -> ApiResult<Vec<DeadLetterView>> {
     let rows = sqlx::query(
         "SELECT identifier, customer_id, meter, units, event_at, direction,
                 destination, reason, recorded_at
@@ -693,7 +706,7 @@ async fn list_dead_letters(
          ORDER BY recorded_at DESC
          LIMIT 500",
     )
-    .bind(&caller.account_id)
+    .bind(account_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -711,8 +724,7 @@ async fn list_dead_letters(
                 recorded_at: row.try_get("recorded_at")?,
             })
         })
-        .collect::<ApiResult<Vec<_>>>()
-        .map(Json)
+        .collect()
 }
 
 async fn resolve_dead_letter(
@@ -720,21 +732,34 @@ async fn resolve_dead_letter(
     AdminCaller(caller): AdminCaller,
     Path(identifier): Path<String>,
 ) -> ApiResult<Json<serde_json::Value>> {
+    resolve_for(&state, &caller.account_id, &identifier).await?;
+    Ok(Json(serde_json::json!({ "resolved": identifier })))
+}
+
+/// Mark a dead letter reconciled, without deciding who asked.
+///
+/// Resolving is a statement that a human dealt with it elsewhere; it does not
+/// retry delivery, and nothing here pretends it does.
+///
+/// # Errors
+///
+/// Answers `not found` for an identifier that is not this account's.
+pub async fn resolve_for(state: &AppState, account_id: &str, identifier: &str) -> ApiResult<()> {
     let result = sqlx::query(
         "UPDATE export_dead_letters
          SET resolved_at = COALESCE(resolved_at, NOW()), resolved_by = $3
          WHERE account_id = $1 AND identifier = $2",
     )
-    .bind(&caller.account_id)
-    .bind(&identifier)
-    .bind(&caller.account_id)
+    .bind(account_id)
+    .bind(identifier)
+    .bind(account_id)
     .execute(&state.pool)
     .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
-    Ok(Json(serde_json::json!({ "resolved": identifier })))
+    Ok(())
 }
 
 #[cfg(test)]

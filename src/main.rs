@@ -10,6 +10,7 @@
 #![warn(missing_docs, clippy::pedantic)]
 
 mod accounts;
+mod app;
 mod auth;
 mod billing;
 mod edge;
@@ -197,6 +198,7 @@ fn build_router(state: AppState) -> Router {
         .merge(people::router())
         .merge(accounts::router())
         .merge(pages::router())
+        .merge(app::router())
         // `ServeDir` resolves against the process working directory rather than
         // the crate root, which is why the Dockerfile copies `static/` next to
         // the binary. Getting this wrong fails only in the container, where

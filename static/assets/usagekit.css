@@ -430,6 +430,152 @@ code {
 .footer-name { font-weight: 680; margin: 0 0 0.4rem; letter-spacing: -0.02em; }
 .footer-note { font-size: 0.875rem; color: var(--faint); margin: 0; max-width: 26rem; }
 
+/* ------------------------------------------------------------ dashboard */
+
+.wide-wrap { width: min(84rem, 100% - 3rem); margin-inline: auto; }
+.wide-wrap .narrow-wrap { width: min(var(--narrow), 100%); margin-inline: 0; }
+
+.account-bar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem; }
+.account-name { font-weight: 640; }
+.account-email { color: var(--faint); }
+
+.inline-form { display: inline; margin: 0; }
+
+/* A button that reads as a link. It stays a button because the action changes
+ * state, and a link that changes state is wrong for anything that prefetches. */
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-size: 0.9rem;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link-button:hover { color: var(--accent-hover); }
+.link-danger { color: var(--danger); }
+.link-danger:hover { color: var(--danger); }
+
+.stats {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  margin-top: 1.75rem;
+}
+.stat { background: var(--surface); padding: 1.1rem 1.25rem; }
+.stat-label {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.68rem;
+  font-weight: 640;
+  color: var(--faint);
+  margin: 0 0 0.4rem;
+}
+.stat-figure {
+  margin: 0;
+  font-size: 1.85rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-alarm { background: var(--warning-soft); }
+.stat-alarm .stat-figure { color: var(--warning); }
+
+.section-alarm {
+  background: var(--warning-soft);
+  border-block: 1px solid var(--warning);
+}
+
+/* Dashboard tables are wider than a phone. Scrolling the table rather than the
+ * page keeps the rest of the layout intact, and `tabindex` makes the scroll
+ * region reachable from the keyboard. */
+.panel-flush { padding: 0; overflow-x: auto; }
+.panel-flush .figures { min-width: 38rem; }
+.panel-flush .figures th, .panel-flush .figures td { padding: 0.7rem 1rem; }
+
+.empty {
+  color: var(--faint);
+  font-size: 0.95rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  margin: 1.5rem 0;
+  text-align: center;
+}
+
+.pill {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 640;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-radius: 999px;
+  padding: 0.16rem 0.55rem;
+  border: 1px solid;
+  white-space: nowrap;
+}
+.pill-ok { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.pill-bad { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.pill-wait { color: var(--warning); border-color: var(--warning); background: var(--warning-soft); }
+.pill-note { font-size: 0.8rem; color: var(--faint); margin-left: 0.4rem; }
+
+.card-figure {
+  font-size: 1.85rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  margin: 0 0 0.35rem !important;
+  color: var(--ink) !important;
+}
+.card-alarm { border-color: var(--warning); background: var(--warning-soft); }
+.card-alarm .card-figure { color: var(--warning) !important; }
+
+.form-inline {
+  max-width: none;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  align-items: end;
+}
+.form-inline .button { justify-self: start; }
+
+.field select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  padding: 0.6rem 0.75rem;
+  width: 100%;
+}
+
+.panel-secret { border-color: var(--accent); }
+.secret-value {
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  word-break: break-all;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  padding: 0.9rem 1rem;
+  margin: 0;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.notice-warn { background: var(--warning-soft); border-color: var(--warning); color: var(--ink); }
+
+@media (max-width: 760px) {
+  .wide-wrap { width: min(84rem, 100% - 2rem); }
+  .stats { grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr)); }
+  .stat-figure, .card-figure { font-size: 1.45rem; }
+  .account-bar { font-size: 0.82rem; gap: 0.6rem; }
+}
+
 @media (max-width: 760px) {
   .wrap { width: min(var(--shell), 100% - 2rem); }
   .masthead { position: static; }

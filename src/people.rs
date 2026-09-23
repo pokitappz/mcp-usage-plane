@@ -123,6 +123,30 @@ impl FromRequestParts<AppState> for CurrentUser {
     }
 }
 
+impl axum::extract::OptionalFromRequestParts<AppState> for CurrentUser {
+    type Rejection = ApiError;
+
+    /// Resolve a session if there is one, without refusing when there is not.
+    ///
+    /// The pages need this: an anonymous visitor to the dashboard should be
+    /// sent to sign in, not handed a JSON 401 in a browser window. It is still
+    /// a server-side gate, because a handler that gets `None` renders a
+    /// redirect and never the dashboard.
+    ///
+    /// A cookie that is present but unusable resolves to `None` rather than an
+    /// error, so a stale session from a previous deployment sends someone to
+    /// sign in instead of stranding them on an error page with no way out.
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Option<Self>, Self::Rejection> {
+        let Some(token) = session_cookie(&parts.headers) else {
+            return Ok(None);
+        };
+        resolve_session(state, &token).await
+    }
+}
+
 /// Human authentication routes.
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -238,10 +262,32 @@ async fn request_code(
     headers: HeaderMap,
     Json(body): Json<RequestCode>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    if !origin_is_trusted(&headers, state.public_url.as_deref()) {
+    let development_code = issue_code(&state, &headers, &body.email).await?;
+    Ok(Json(match development_code {
+        Some(code) => serde_json::json!({ "status": "sent", "development_code": code }),
+        None => serde_json::json!({ "status": "sent" }),
+    }))
+}
+
+/// Issue a sign-in code, without deciding how the answer is presented.
+///
+/// Split from the handler so the JSON route and the browser form share one
+/// implementation. Two copies of a sign-in path is one copy too many: the one
+/// that drifts is the one that forgets the oracle-avoidance below.
+///
+/// # Errors
+///
+/// Refuses an untrusted origin, an unusable address, and a spent budget.
+/// Everything else answers the same way whether or not the address exists.
+pub async fn issue_code(
+    state: &AppState,
+    headers: &HeaderMap,
+    raw_email: &str,
+) -> ApiResult<Option<String>> {
+    if !origin_is_trusted(headers, state.public_url.as_deref()) {
         return Err(ApiError::Forbidden);
     }
-    let email = normalize_email(&body.email)?;
+    let email = normalize_email(raw_email)?;
 
     // Budget is taken here, explicitly, because nothing upstream takes one for
     // a route with no bearer extractor.
@@ -266,13 +312,11 @@ async fn request_code(
 
     // The same answer either way. Telling an anonymous caller whether an
     // address is registered turns this into an account-existence oracle.
-    let accepted = Json(serde_json::json!({ "status": "sent" }));
-
     let Some((user_id, disabled_at)) = user else {
-        return Ok(accepted);
+        return Ok(None);
     };
     if disabled_at.is_some() {
-        return Ok(accepted);
+        return Ok(None);
     }
 
     let code = generate_code();
@@ -300,10 +344,10 @@ async fn request_code(
     if issued.rows_affected() == 0 {
         // Inside the cooldown. Still the same answer: whether a code was just
         // sent is also information about the address.
-        return Ok(accepted);
+        return Ok(None);
     }
 
-    deliver_code(&state, &email, &code).await
+    deliver_code(state, &email, &code).await
 }
 
 /// Send a sign-in code, or explain why it cannot be sent.
@@ -312,21 +356,12 @@ async fn request_code(
 /// answer rather than a cheerful "sent". A debug build against no mail service
 /// returns the code instead, which keeps the flow testable; that arm is
 /// compiled out of a release build.
-async fn deliver_code(
-    state: &AppState,
-    email: &str,
-    code: &str,
-) -> ApiResult<Json<serde_json::Value>> {
-    let accepted = Json(serde_json::json!({ "status": "sent" }));
-
+async fn deliver_code(state: &AppState, email: &str, code: &str) -> ApiResult<Option<String>> {
     let Some(client) = state.email.as_ref() else {
         #[cfg(debug_assertions)]
         {
             tracing::warn!("email is not configured; returning the code for development");
-            return Ok(Json(serde_json::json!({
-                "status": "sent",
-                "development_code": code
-            })));
+            return Ok(Some(code.to_owned()));
         }
         #[cfg(not(debug_assertions))]
         {
@@ -339,7 +374,7 @@ async fn deliver_code(
         tracing::error!(%error, "could not send a sign-in code");
         return Err(ApiError::Internal);
     }
-    Ok(accepted)
+    Ok(None)
 }
 
 async fn verify(
@@ -347,11 +382,35 @@ async fn verify(
     headers: HeaderMap,
     Json(body): Json<RedeemCode>,
 ) -> ApiResult<Response> {
-    if !origin_is_trusted(&headers, state.public_url.as_deref()) {
+    let token = redeem_code(&state, &headers, &body.email, &body.code).await?;
+    let mut response = Json(serde_json::json!({ "status": "signed_in" })).into_response();
+    response
+        .headers_mut()
+        .insert(header::SET_COOKIE, session_cookie_for(&state, &token));
+    Ok(response)
+}
+
+/// Redeem a code and open a session, returning the new session token.
+///
+/// Split from the handler for the same reason as [`issue_code`]. The caller
+/// decides what to do with the token; every caller must set it with
+/// [`session_cookie_for`] rather than handing it to a page.
+///
+/// # Errors
+///
+/// Refuses an untrusted origin, a spent budget, and anything about the code
+/// being wrong, expired or already spent, all as the same `unauthorized`.
+pub async fn redeem_code(
+    state: &AppState,
+    headers: &HeaderMap,
+    raw_email: &str,
+    raw_code: &str,
+) -> ApiResult<String> {
+    if !origin_is_trusted(headers, state.public_url.as_deref()) {
         return Err(ApiError::Forbidden);
     }
-    let email = normalize_email(&body.email)?;
-    let code = body.code.trim().to_owned();
+    let email = normalize_email(raw_email)?;
+    let code = raw_code.trim().to_owned();
 
     if !state
         .admission
@@ -423,16 +482,42 @@ async fn verify(
     .await?;
 
     tx.commit().await?;
+    Ok(token)
+}
 
+/// The `Set-Cookie` value for a new session on this deployment.
+///
+/// `Secure` is decided from the configured public origin rather than from the
+/// request, because a request header is attacker-controlled and this decides
+/// whether the cookie may travel in plaintext.
+#[must_use]
+pub fn session_cookie_for(state: &AppState, token: &str) -> HeaderValue {
     let secure = state
         .public_url
         .as_deref()
         .is_some_and(|url| url.starts_with("https://"));
-    let mut response = Json(serde_json::json!({ "status": "signed_in" })).into_response();
-    response
-        .headers_mut()
-        .insert(header::SET_COOKIE, set_cookie(&token, secure));
-    Ok(response)
+    set_cookie(token, secure)
+}
+
+/// The `Set-Cookie` value that ends a session.
+#[must_use]
+pub fn session_clear_cookie() -> HeaderValue {
+    clear_cookie()
+}
+
+/// Drop whatever session the request carries. Never fails for lack of one.
+///
+/// # Errors
+///
+/// Only when the delete cannot reach the database.
+pub async fn end_session(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
+    if let Some(token) = session_cookie(headers) {
+        sqlx::query("DELETE FROM user_sessions WHERE session_sha256 = $1")
+            .bind(hash_token(&token))
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn session(user: CurrentUser, State(state): State<AppState>) -> ApiResult<Json<SessionView>> {
@@ -455,12 +540,7 @@ async fn session(user: CurrentUser, State(state): State<AppState>) -> ApiResult<
 async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     // Deliberately not behind `CurrentUser`: signing out with an already
     // invalid session should clear the cookie, not answer 401.
-    if let Some(token) = session_cookie(&headers) {
-        sqlx::query("DELETE FROM user_sessions WHERE session_sha256 = $1")
-            .bind(hash_token(&token))
-            .execute(&state.pool)
-            .await?;
-    }
+    end_session(&state, &headers).await?;
     let mut response = Json(serde_json::json!({ "status": "signed_out" })).into_response();
     response
         .headers_mut()

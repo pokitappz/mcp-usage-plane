@@ -1,0 +1,378 @@
+{% extends "app_base.html" %}
+{% block main %}
+
+<section class="page-head">
+  <div class="wide-wrap">
+    <p class="eyebrow">Dashboard</p>
+    <h1>{{ account_name }}</h1>
+
+    {% match notice %}
+    {% when Some with (message) %}
+    <p class="notice {{ notice_kind }}" role="status">{{ message }}</p>
+    {% when None %}
+    {% endmatch %}
+
+    <div class="stats">
+      <div class="stat">
+        <p class="stat-label">Metered events, 30 days</p>
+        <p class="stat-figure">{{ summary.units_30d }}</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Billing customers</p>
+        <p class="stat-figure">{{ summary.tenants }}</p>
+      </div>
+      <div class="stat">
+        <p class="stat-label">Awaiting export</p>
+        <p class="stat-figure">{{ summary.pending }}</p>
+      </div>
+      <div class="stat {% if summary.dead_lettered > 0 %}stat-alarm{% endif %}">
+        <p class="stat-label">Needs reconciling</p>
+        <p class="stat-figure">{{ summary.dead_lettered }}</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+{% if summary.dead_lettered > 0 %}
+<section class="section section-alarm">
+  <div class="wide-wrap">
+    <h2>{{ summary.dead_lettered }} aggregates were metered and never delivered.</h2>
+    <p class="prose">
+      This is usage your provider has not been told about, which means it is revenue nobody is
+      being charged for. Each one was rejected permanently rather than transiently, so it needs a
+      person rather than another retry.
+    </p>
+    <p class="prose">
+      Resolving marks it reconciled here. It does not resend anything, and nothing on this page
+      pretends otherwise.
+    </p>
+  </div>
+</section>
+{% endif %}
+
+<!-- ------------------------------------------------------------- usage -->
+<section class="section" id="usage">
+  <div class="wide-wrap">
+    <h2>Usage</h2>
+    <p class="prose">
+      Terminal deliveries by day, customer and meter, for the last 30 days. These are the same
+      figures <code>GET /v1/usage</code> returns, from the same query.
+    </p>
+
+    {% if usage.is_empty() %}
+    <p class="empty">No usage recorded in the last 30 days.</p>
+    {% else %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Metered usage by day, customer and meter</caption>
+        <thead>
+          <tr>
+            <th scope="col">Day</th>
+            <th scope="col">Customer</th>
+            <th scope="col">Meter</th>
+            <th scope="col" class="numeric">Units</th>
+            <th scope="col" class="numeric">Aggregates</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in usage %}
+          <tr>
+            <th scope="row">{{ row.day }}</th>
+            <td>{{ row.customer }}</td>
+            <td>{{ row.meter }}</td>
+            <td class="numeric">{{ row.units }}</td>
+            <td class="numeric">{{ row.events }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------- quota -->
+<section class="section section-alt" id="quota">
+  <div class="wide-wrap">
+    <h2>Quota and spend caps</h2>
+    <p class="prose">
+      Where each customer stands this month. <strong>Admitting</strong> answers whether the next
+      unit would be allowed, which is the same question, asked of the same function, that the
+      sidecar answers when it admits or refuses a call.
+    </p>
+
+    {% if quota.is_empty() %}
+    <p class="empty">No tenants configured yet.</p>
+    {% else %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Quota status per billing customer</caption>
+        <thead>
+          <tr>
+            <th scope="col">Customer</th>
+            <th scope="col" class="numeric">Units this month</th>
+            <th scope="col" class="numeric">Spend this month</th>
+            <th scope="col">Next unit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in quota %}
+          <tr>
+            <th scope="row">{{ row.customer }}</th>
+            <td class="numeric">{{ row.units }}</td>
+            <td class="numeric">{{ row.spend }}</td>
+            <td>
+              {% if row.admitting %}
+              <span class="pill pill-ok">Admitting</span>
+              {% else %}
+              <span class="pill pill-bad">Refusing</span>
+              <span class="pill-note">{{ row.reason }}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ---------------------------------------------------------- invoices -->
+<section class="section" id="billing">
+  <div class="wide-wrap">
+    <h2>What you have been charged</h2>
+    <p class="prose">{{ terms.summary }}</p>
+
+    {% if invoices.is_empty() %}
+    <p class="empty">
+      No period has closed yet. A period is charged once, after it ends, and each invoice records
+      the terms it applied rather than pointing at your current ones.
+    </p>
+    {% else %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Closed periods and what each was charged</caption>
+        <thead>
+          <tr>
+            <th scope="col">Period</th>
+            <th scope="col" class="numeric">Metered units</th>
+            <th scope="col" class="numeric">Your revenue</th>
+            <th scope="col" class="numeric">Charged</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in invoices %}
+          <tr>
+            <th scope="row">{{ row.period }}</th>
+            <td class="numeric">{{ row.units }}</td>
+            <td class="numeric">{{ row.revenue }}</td>
+            <td class="numeric">{{ row.charge }}</td>
+            <td>
+              {% if row.settled %}
+              <span class="pill pill-ok">Settled</span>
+              {% else %}
+              <span class="pill pill-wait">Awaiting submission</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ----------------------------------------------------------- tenants -->
+<section class="section section-alt" id="tenants">
+  <div class="wide-wrap">
+    <h2>Your customers</h2>
+    <p class="prose">
+      A tenant is one of your billing customers, its price book, and the keys its sidecars
+      authenticate with. Price books are edited through <code>PATCH /v1/tenants</code> with an
+      admin token, because a price book is structured JSON and a form that flattened it would lose
+      the per-name prices.
+    </p>
+
+    {% if tenants.is_empty() %}
+    <p class="empty">No tenants yet. Create one with <code>POST /v1/tenants</code>.</p>
+    {% else %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Tenants and their terms</caption>
+        <thead>
+          <tr>
+            <th scope="col">Tenant</th>
+            <th scope="col">Billing customer</th>
+            <th scope="col" class="numeric">Unit price</th>
+            <th scope="col" class="numeric">Unit cap</th>
+            <th scope="col" class="numeric">Spend cap</th>
+            <th scope="col" class="numeric">Live keys</th>
+            <th scope="col">New key</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in tenants %}
+          <tr>
+            <th scope="row">
+              {{ row.key }}
+              {% if row.revoked %}<span class="pill pill-bad">Revoked</span>{% endif %}
+            </th>
+            <td>{{ row.customer }}</td>
+            <td class="numeric">{{ row.unit_price }}</td>
+            <td class="numeric">{{ row.max_units }}</td>
+            <td class="numeric">{{ row.max_spend }}</td>
+            <td class="numeric">{{ row.active_keys }}</td>
+            <td>
+              {% if row.revoked %}
+              <span class="pill-note">Revoked</span>
+              {% else %}
+              <form method="post" action="/app/tenants/{{ row.key|urlencode_strict }}/keys" class="inline-form">
+                <button class="link-button" type="submit">Mint</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ export -->
+<section class="section" id="export">
+  <div class="wide-wrap">
+    <h2>Export</h2>
+    <p class="prose">
+      Where metered usage is forwarded. The credential is sealed at rest and never readable back,
+      which is why this shows only whether one is stored. Configure it with
+      <code>PUT /v1/export/destination</code>.
+    </p>
+
+    <div class="grid grid-three">
+      <article class="card">
+        <h3>Destination</h3>
+        <p class="card-figure">{{ destination_kind }}</p>
+        <p>{{ destination_secret }}</p>
+      </article>
+      <article class="card">
+        <h3>Awaiting export</h3>
+        <p class="card-figure">{{ summary.pending }}</p>
+        <p>Aggregates recorded here and not yet forwarded. A backlog that keeps growing means the
+          destination is refusing or unreachable.</p>
+      </article>
+      <article class="card {% if summary.dead_lettered > 0 %}card-alarm{% endif %}">
+        <h3>Needs reconciling</h3>
+        <p class="card-figure">{{ summary.dead_lettered }}</p>
+        <p>Permanently rejected. Retrying will not fix these, so they wait for a person.</p>
+      </article>
+    </div>
+
+    {% if !dead_letters.is_empty() %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Aggregates awaiting reconciliation</caption>
+        <thead>
+          <tr>
+            <th scope="col">Recorded</th>
+            <th scope="col">Customer</th>
+            <th scope="col">Meter</th>
+            <th scope="col" class="numeric">Units</th>
+            <th scope="col">Direction</th>
+            <th scope="col">Why</th>
+            <th scope="col">Resolve</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in dead_letters %}
+          <tr>
+            <th scope="row">{{ row.when }}</th>
+            <td>{{ row.customer }}</td>
+            <td>{{ row.meter }}</td>
+            <td class="numeric">{{ row.units }}</td>
+            <td>{{ row.direction }}</td>
+            <td>{{ row.reason }}</td>
+            <td>
+              <form method="post" action="/app/dead-letters/{{ row.identifier|urlencode_strict }}/resolve" class="inline-form">
+                <button class="link-button" type="submit">Mark resolved</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ tokens -->
+<section class="section section-alt" id="tokens">
+  <div class="wide-wrap">
+    <h2>API credentials</h2>
+    <p class="prose">
+      An <strong>edge</strong> token goes to your sidecars and cannot reach pricing. An
+      <strong>admin</strong> token manages tenants, prices and export configuration, and does not
+      belong in a sidecar's environment. Both are shown once, at creation.
+    </p>
+
+    <form class="form form-inline" method="post" action="/app/tokens">
+      <div class="field">
+        <label for="scope">Scope</label>
+        <select id="scope" name="scope">
+          <option value="edge">edge, for a sidecar</option>
+          <option value="admin">admin, for your own tooling</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="label">Label</label>
+        <input id="label" name="label" type="text" maxlength="200" placeholder="staging sidecar">
+      </div>
+      <button class="button" type="submit">Mint a token</button>
+    </form>
+
+    {% if tokens.is_empty() %}
+    <p class="empty">No tokens on this account.</p>
+    {% else %}
+    <div class="panel panel-flush">
+      <table class="figures">
+        <caption class="visually-hidden">Account credentials</caption>
+        <thead>
+          <tr>
+            <th scope="col">Label</th>
+            <th scope="col">Scope</th>
+            <th scope="col">Digest</th>
+            <th scope="col">Created</th>
+            <th scope="col">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in tokens %}
+          <tr>
+            <th scope="row">{{ row.label }}</th>
+            <td>{{ row.scope }}</td>
+            <td><code>{{ row.digest_short }}</code></td>
+            <td>{{ row.created }}</td>
+            <td>
+              {% if row.revoked %}
+              <span class="pill pill-bad">Revoked</span>
+              {% else %}
+              <form method="post" action="/app/tokens/{{ row.digest }}/revoke" class="inline-form">
+                <button class="link-button link-danger" type="submit">Revoke</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+{% endblock %}
