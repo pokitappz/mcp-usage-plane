@@ -62,11 +62,47 @@ prices.
 | `GET /v1/pricing/invoices` | admin | Closed periods and what each was charged |
 | `GET /v1/billing` | admin | Subscription status and unbilled units |
 | `PUT /v1/billing` | admin | Link the account to a Stripe customer |
-| `POST /v1/signup` | none | Self-serve signup, gated by a shared secret |
+| `POST /v1/auth/code` | none | Email a sign-in code to a known address |
+| `POST /v1/auth/verify` | none | Redeem a code for a browser session |
+| `GET /v1/auth/session` | session | Who the caller is and which account they act on |
+| `DELETE /v1/auth/session` | session | Sign out, deleting the session server side |
+| `POST /v1/signup` | none | Operator tool, gated by a shared secret. Not the human path |
 | `POST /v1/stripe/webhook` | signature | Subscription lifecycle and invoice outcomes from Stripe |
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
 snapshot, and the sidecar cannot authenticate a key it was never given.
+
+## Two kinds of caller
+
+Machines present a bearer token. People present a session cookie. They are
+separate systems on purpose, and neither opens the other's routes.
+
+A bearer token is a long-lived credential that is also a full admin credential
+for its account. That is right for a sidecar and wrong for a browser: any script
+on the page could read it, it does not expire, and it cannot be attributed to a
+person. So the dashboard uses a session instead.
+
+Sign-in is passwordless. A six digit code is emailed to a **known** address,
+redeemed once, and exchanged for an opaque session. Only the session's SHA-256
+reaches the database, the same property `account_tokens` already has, so a
+database disclosure does not hand over live sessions.
+
+| Property | Value |
+|---|---|
+| Cookie | `HttpOnly`, `SameSite=Lax`, `Secure` when `APP_PUBLIC_URL` is https |
+| Session lifetime | 7 days |
+| Code lifetime | 10 minutes, one use |
+| Wrong guesses | 5, then the code is spent rather than reset |
+| Resend cooldown | 60 seconds, enforced in SQL so a race cannot beat it |
+
+Two deliberate refusals. An unknown address gets the same answer as a known one,
+because anything else makes the endpoint an account-existence oracle. And a
+state-changing request with **no** `Origin` header is refused rather than assumed
+friendly, so the CSRF check fails closed.
+
+Access is granted by hand: a user row and a membership are created when an
+access request is approved. `POST /v1/signup` remains an operator tool with a
+shared secret, no email and no verification, and is not the human path.
 
 ## Request bounds
 
@@ -77,6 +113,8 @@ authentication cache, both process-local.
 |---|---|---|
 | Requests per token | 240 / minute | Refused with `429` and a `Retry-After`. Per token, so one customer's sidecar cannot deny service to another |
 | Failed authentications | 20 / minute | Tighter, and counted separately. A failure always reaches the database because there is nothing to cache |
+| Sign-in codes | 5 / minute per address | Taken explicitly. The per-token budget is spent inside `auth::resolve`, so a route with no bearer extractor never reaches it |
+| Code redemptions | 20 / minute per address | Same reason |
 | Authentication cache | 10 seconds | Removes a database round trip from every request. Revoking a token calls through to drop the entry, so revocation does not wait for the TTL |
 | Request body | 64 KiB, or 4 MiB on `/v1/edge/usage` | Only the usage post legitimately carries a large body |
 | Request timeout | 30 seconds | Outermost, so a client that trickles its body cannot hold a pool connection indefinitely |

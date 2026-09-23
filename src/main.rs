@@ -12,8 +12,10 @@
 mod auth;
 mod billing;
 mod edge;
+mod email;
 mod error;
 mod export;
+mod people;
 mod pricing;
 mod providers;
 mod secret;
@@ -44,6 +46,10 @@ pub struct AppState {
     /// Most recent database probe, so an unauthenticated health poll does not
     /// cost a query every time.
     pub health: std::sync::Arc<throttle::HealthProbe>,
+    /// Public origin, for cookie security and the CSRF origin check.
+    pub public_url: Option<String>,
+    /// Transactional email, when configured.
+    pub email: Option<std::sync::Arc<email::EmailClient>>,
     /// Per-token authentication cache and rate limiter.
     ///
     /// `Arc` because `AppState` is cloned per request and the budget has to be
@@ -119,11 +125,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let plane_billing = billing::PlaneBilling::from_env();
     tracing::info!(?plane_billing, "plane billing configuration");
 
+    let public_url = public_url_from_env()?;
+    let mail = email::EmailClient::from_env()?.map(std::sync::Arc::new);
+    if mail.is_none() {
+        tracing::warn!("email is not configured; sign-in codes cannot be delivered");
+    }
+
     let state = AppState {
         pool,
         sealing,
         allow_loopback_destinations,
         billing: plane_billing,
+        public_url,
+        email: mail,
         health: std::sync::Arc::new(throttle::HealthProbe::default()),
         admission: std::sync::Arc::new(throttle::Admission::default()),
     };
@@ -136,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(billing::router())
         .merge(tokens::router())
         .merge(pricing::router())
+        .merge(people::router())
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         // Outermost, so it also bounds a client that is slow to send its body.
         // Without it a trickling request holds a pool connection for as long as
@@ -178,6 +193,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.pool.close().await;
     tracing::info!("shutdown complete");
     Ok(())
+}
+
+/// The public origin, validated.
+///
+/// Load bearing for browser security rather than cosmetic: it decides whether
+/// the session cookie is `Secure`, and it is the only thing the CSRF origin
+/// check compares against. Unset means every state-changing human route
+/// refuses, which is the right direction to fail.
+fn public_url_from_env() -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let public_url = std::env::var("APP_PUBLIC_URL")
+        .ok()
+        .map(|value| value.trim_end_matches('/').to_owned())
+        .filter(|value| !value.is_empty());
+
+    match public_url.as_deref() {
+        Some(url) if url.starts_with("https://") => {}
+        Some(url) if url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1") => {
+            tracing::warn!(url, "APP_PUBLIC_URL is plaintext; acceptable only locally");
+        }
+        Some(url) => return Err(format!("APP_PUBLIC_URL must be https, got {url}").into()),
+        None => tracing::warn!(
+            "APP_PUBLIC_URL is unset; sign-in and every state-changing human route will refuse"
+        ),
+    }
+    Ok(public_url)
 }
 
 /// Liveness. Deliberately touches the database: a plane that cannot reach

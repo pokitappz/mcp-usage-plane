@@ -68,6 +68,7 @@ pub struct Admission {
     cache: Mutex<HashMap<String, Cached>>,
     requests: Mutex<HashMap<String, Bucket>>,
     failures: Mutex<HashMap<String, Bucket>>,
+    named: Mutex<HashMap<String, Bucket>>,
 }
 
 impl Admission {
@@ -121,6 +122,16 @@ impl Admission {
     /// Take one unit of the failed-authentication budget.
     pub fn take_failure(&self, fingerprint: &str) -> bool {
         take(&self.failures, fingerprint, FAILURE_BURST)
+    }
+
+    /// Take one unit of a named budget.
+    ///
+    /// For routes that have no bearer extractor and therefore never reach
+    /// [`Self::take_request`]. That gap is not hypothetical: it is why
+    /// `POST /v1/signup` is unbounded. The name is part of the key, so two
+    /// callers of this method cannot spend each other's allowance.
+    pub fn take_named(&self, budget: &str, subject: &str, burst: u32) -> bool {
+        take(&self.named, &format!("{budget}:{subject}"), burst)
     }
 
     /// Seconds a refused caller should wait, for `Retry-After`.

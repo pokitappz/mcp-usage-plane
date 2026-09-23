@@ -16,8 +16,8 @@ kill_timeout = '15s'
   # Sidecars poll this on a short interval and fail closed once their snapshot
   # ages out, so a cold start in that path is a customer-visible outage.
   auto_stop_machines = false
-  auto_start_machines = true
-  min_machines_running = 1
+  auto_start_machines = false
+  min_machines_running = 0
   processes = ['app']
 
   [http_service.concurrency]

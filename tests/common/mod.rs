@@ -164,7 +164,12 @@ impl Plane {
             // Export destinations in these suites point at loopback test
             // servers, which production must never allow.
             .env("ALLOW_LOOPBACK_DESTINATIONS", "1")
-            .env("EXPORT_DRAIN_INTERVAL_SECONDS", "1");
+            .env("EXPORT_DRAIN_INTERVAL_SECONDS", "1")
+            // The CSRF check compares Origin against this, and the session
+            // cookie is only `Secure` when it is https. Without it every
+            // state-changing human route refuses, which is the right default
+            // but makes the sign-in suite untestable.
+            .env("APP_PUBLIC_URL", format!("http://127.0.0.1:{port}"));
         for (name, value) in extra {
             command.env(name, value);
         }
