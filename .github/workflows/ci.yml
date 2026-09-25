@@ -130,10 +130,13 @@ jobs:
       # Leaving it out of the image produces a container that builds, starts,
       # passes a health check, and serves every page unstyled. This is the only
       # place that failure is visible before a customer sees it.
-      - name: Serve a page and an asset from the image
+      # The image now ships two configurations and both are real: the default,
+      # which is what anyone running this themselves gets, and ours, which adds
+      # the public site. Checking only one of them is how the wrong one breaks.
+      - name: Serve the image the way somebody else would run it
         run: |
           set -euo pipefail
-          docker run --detach --name plane --network host \
+          docker run --detach --name plane-default --network host \
             --env DATABASE_URL=postgres://plane:plane@127.0.0.1:5432/plane \
             --env APP_PUBLIC_URL=http://localhost:8081 \
             mcp-usage-plane:ci
@@ -147,11 +150,45 @@ jobs:
 
           # `--fail` turns a 404 into a non-zero exit, which is the whole point:
           # a missing stylesheet must fail the job rather than be logged.
-          curl --silent --fail --max-time 5 http://localhost:8081/ \
-            | grep --quiet 'UsageKit'
+          curl --silent --fail --max-time 5 http://localhost:8081/signin \
+            | grep --quiet 'Usage control plane'
           curl --silent --fail --max-time 5 http://localhost:8081/assets/usagekit.css \
             | grep --quiet -- '--accent'
 
-      - name: Show the container log on failure
+          # The marketing pages are ours and must not ship by default. `--fail`
+          # makes a 404 a non-zero exit, so this asserts the absence.
+          if curl --silent --fail --max-time 5 http://localhost:8081/pricing >/dev/null; then
+            echo "the image serves our pricing page without being asked to" >&2
+            exit 1
+          fi
+
+          docker rm --force plane-default
+
+      - name: Serve the image the way we run it
+        run: |
+          set -euo pipefail
+          docker run --detach --name plane-ours --network host \
+            --env DATABASE_URL=postgres://plane:plane@127.0.0.1:5432/plane \
+            --env APP_PUBLIC_URL=http://localhost:8081 \
+            --env PLANE_PUBLIC_SITE=1 \
+            --env PLANE_PRODUCT_NAME=UsageKit \
+            --env PLANE_PRODUCT_SUFFIX=Cloud \
+            mcp-usage-plane:ci
+
+          for _ in $(seq 1 60); do
+            if curl --silent --fail --max-time 2 http://localhost:8081/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          curl --silent --fail --max-time 5 http://localhost:8081/ \
+            | grep --quiet 'UsageKit'
+          curl --silent --fail --max-time 5 http://localhost:8081/pricing \
+            | grep --quiet 'billable events'
+
+      - name: Show the container logs on failure
         if: failure()
-        run: docker logs plane || true
+        run: |
+          docker logs plane-default 2>&1 || true
+          docker logs plane-ours 2>&1 || true
