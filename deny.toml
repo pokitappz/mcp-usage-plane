@@ -3,10 +3,11 @@
 # `cargo audit` covers RustSec advisories. This file covers what it does not:
 # license compliance, where crates are allowed to come from, and structural
 # hygiene of the dependency graph. It matters more here than in the Apache-2.0
-# crates: this tree is redistributed under the Functional Source License, so a
+# crates: this tree is redistributed under the Business Source License, so a
 # copyleft dependency reaching it is a licensing problem rather than a note in a
 # NOTICE file. Every licence below is permissive, which is what makes
-# distributing this at all possible.
+# distributing this at all possible, and what will keep it possible when each
+# version converts to Apache-2.0 on its Change Date.
 #
 # Every list below was derived from an actual run over this lockfile, not copied
 # from the sibling repository. Re-derive rather than guess when adding a
@@ -51,8 +52,10 @@ confidence-threshold = 0.93
 exceptions = []
 
 # `mcp-usage-plane` carries `license-file = "LICENSE.md"` rather than a `license`
-# expression, because the Functional Source License has no SPDX identifier for
-# cargo-deny to match. `plane-sqlx-postgres` is an internal facade with no
+# expression. `BUSL-1.1` does have an SPDX identifier, but cargo-deny would then
+# have to be told to allow it in a list whose whole purpose is refusing licences
+# we have not accepted, and allowing our own would weaken that list for the
+# dependencies it exists to police. `plane-sqlx-postgres` is an internal facade with no
 # licence field at all. Both are `publish = false`, so ignoring them here is
 # narrower than inventing a licence string that would then have to be kept true.
 [licenses.private]

@@ -2,9 +2,10 @@
 
 Usage and entitlement control plane for MCP servers. The paid half of the
 open-core split: the metering crates and the proxy are Apache-2.0, this service
-is source-available under the [Functional Source License](#licence). You may run
-it for your own billing; you may not offer it as a competing service; it becomes
-Apache-2.0 two years after each release.
+is source-available under the [Business Source License](#licence). Read it,
+build it and run it outside production for free; production use is **$299 a
+month** per deployment; each version becomes Apache-2.0 four years after it
+ships.
 
 ```
                           [ control plane ]        <- this service
@@ -463,6 +464,9 @@ Nothing in this service assumes we are the ones operating it. Point it at your
 own Postgres and your own Stripe account and no credential of yours reaches us,
 which answers most of what the `/security` page has to be careful about.
 
+Everything below is free to run outside production. Putting it in front of real
+customers needs a subscription; see [Licence](#licence).
+
 ```sh
 DATABASE_URL='postgres://...' \
 SECRET_SEALING_KEY="$(head -c 32 /dev/urandom | base64)" \
@@ -490,13 +494,22 @@ Three things behave differently from our deployment, all deliberately:
 
 ## Licence
 
-[Functional Source License 1.1, Apache-2.0 future licence](LICENSE.md).
+[Business Source License 1.1](LICENSE.md), converting to Apache-2.0.
 
-In plain terms: read it, modify it, run it for your own billing, and provide
-professional services around it. What you may not do is offer it to others as a
-product or service that substitutes for this one. Two years after any given
-version is released, that version is available to you under Apache-2.0 with no
-conditions.
+| | |
+|---|---|
+| **Free** | Reading, modifying, building and running it outside production. Evaluation, development, testing and staging need no subscription and no conversation |
+| **Paid** | Production use, at **$299 per month per deployment**. That is the whole price: no per-event charge, no percentage of what you bill, no seat count |
+| **Eventually free** | Each version converts to Apache-2.0 on its Change Date, four years after it ships, and stays that way |
+
+The Additional Use Grant is `None`, which means the licence's own terms decide
+what is free: BSL grants non-production use to everybody, and production use is
+what a subscription buys. There is deliberately nothing to measure or report.
+
+Buying it is an email to support@pokitapps.com. There is no licence key, no
+phone-home check and no audit clause, because a self-hosted deployment cannot
+be policed and pretending otherwise would only inconvenience the people who do
+pay.
 
 The dependency tree is entirely permissive, which is what makes distributing it
 possible at all, and `cargo deny` fails the build if a copyleft-only dependency

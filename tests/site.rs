@@ -235,10 +235,55 @@ async fn the_home_page_answers_a_buyer_before_it_answers_an_engineer() {
         body.contains("cargo run -p mcp-overbilling"),
         "the reproduce-it-yourself command was lost in the rewrite"
     );
+
+    // Both ways of paying are on the page a buyer lands on. The self-hosted
+    // price is the one somebody with a data-residency problem is looking for,
+    // and burying it on another page loses exactly that buyer.
+    assert!(
+        body.contains("$299 a month"),
+        "the self-hosted price is not on the home page"
+    );
     for figure in ["45", "152", "453"] {
         assert!(
             body.contains(figure),
             "the measurement lost the figure {figure}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_pricing_page_states_both_ways_of_paying() {
+    let url = require_db!();
+    let plane = Plane::start(&url).await;
+    let page = get(&plane, "/pricing").await;
+    let body = &page.body;
+
+    // Hosted, priced on usage.
+    assert!(body.contains("$0.50"), "the hosted price is missing");
+    assert!(body.contains("50,000"), "the free allowance is missing");
+
+    // Self-hosted, priced flat. The licence says production use needs a
+    // subscription, so the page has to say what one costs, or the licence is
+    // pointing at a price that does not exist.
+    // Tied to the price panel rather than to the page. `$299` also appears in
+    // the prose around it, so asserting the page merely mentions the number
+    // passed even with the figure itself removed.
+    assert!(
+        body.contains("<span class=\"price-figure\">$299</span>"),
+        "the self-hosted price is not the figure on the price panel"
+    );
+    assert!(
+        body.contains("per month, per deployment"),
+        "the self-hosted price does not say what it is per"
+    );
+    for promise in [
+        "outside production",
+        "Apache-2.0 four years",
+        "No charge per event",
+    ] {
+        assert!(
+            body.contains(promise),
+            "the self-hosted terms omit {promise:?}"
         );
     }
 }

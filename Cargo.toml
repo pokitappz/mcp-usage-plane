@@ -8,9 +8,9 @@ description = "Usage and entitlement control plane for MCP servers."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-# Source-available under the Functional Source License: run it for your own
-# billing, do not offer it as a competing service, and it becomes Apache-2.0 two
-# years after each version ships.
+# Source-available under the Business Source License 1.1. Non-production use is
+# free; production use needs a subscription; each version becomes Apache-2.0 on
+# its Change Date, four years out.
 license-file = "LICENSE.md"
 # Still false. Source-available means the repository and the container image,
 # not crates.io: this is a service, and `cargo install` is not how anyone would

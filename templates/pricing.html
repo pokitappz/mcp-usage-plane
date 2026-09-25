@@ -36,7 +36,46 @@
 
 <section class="section section-alt">
   <div class="wrap">
-    <p class="micro">What you actually pay</p>
+    <p class="micro">Or run it yourself</p>
+    <h2>$299 a month, whatever your volume.</h2>
+    <p class="prose">
+      The same service, on your own servers, against your own database and your own Stripe
+      account. Nothing of yours reaches us, which answers most of what the
+      <a href="/security">security page</a> otherwise has to be careful about.
+    </p>
+
+    <div class="panel panel-price">
+      <div class="price-head">
+        <p class="micro">Self-hosted</p>
+        <p class="price"><span class="price-figure">$299</span> <span class="price-unit">per month, per deployment</span></p>
+        <p class="price-note">Flat. No charge per event, no percentage of what you bill, no seat count.</p>
+      </div>
+      <ul class="ticks">
+        <li>Free to read, build and run outside production</li>
+        <li>Evaluate, develop, test and stage without talking to anybody</li>
+        <li>No licence key, no phone-home check, no audit clause</li>
+        <li>Every version becomes Apache-2.0 four years after it ships</li>
+      </ul>
+      <a class="button" href="/#request-access">Talk to us</a>
+    </div>
+
+    <p class="prose">
+      The trade is straightforward. Hosted, we run it and you pay for what you use, which is
+      cheaper while you are small. Self-hosted, you run it and the price stops moving, which is
+      cheaper once you are not, and it is the only option if your data cannot leave your own
+      infrastructure.
+    </p>
+    <p class="prose">
+      Buying it is an email. There is nothing to install to prove you paid, because a deployment
+      on your own servers cannot be policed and pretending otherwise would only get in the way of
+      the people who do pay.
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <p class="micro">What you actually pay, hosted</p>
     <h2>Three examples, with the arithmetic shown.</h2>
     <div class="panel">
       <table class="figures">
@@ -70,7 +109,7 @@
   </div>
 </section>
 
-<section class="section">
+<section class="section section-alt">
   <div class="wrap">
     <p class="micro">The thing being counted</p>
     <h2>A billable event is one result your customer actually received.</h2>
@@ -104,7 +143,7 @@
   </div>
 </section>
 
-<section class="section section-alt">
+<section class="section">
   <div class="wrap narrow-wrap">
     <p class="micro">Questions people ask</p>
     <dl class="faq">
@@ -119,6 +158,9 @@
 
       <dt>Can you see my customers' data?</dt>
       <dd>No. We store counts against identifiers that you choose. The names of your tools, what was asked and what came back never leave your own servers, and there is nowhere in our database to put them. The <a href="/security">security page</a> shows exactly what is stored.</dd>
+
+      <dt>Which should I choose, hosted or self-hosted?</dt>
+      <dd>Hosted while you are small: under 50,000 billable events a month it costs nothing, and you have no servers to run. Self-hosted once the usage bill passes $299, or immediately if your data is not allowed to leave your own infrastructure. You can move between them; the service is the same either way.</dd>
 
       <dt>What if I want to leave?</dt>
       <dd>Keep running the meter, which was never ours to take away, and point it somewhere else. Your usage history is exportable and the way the pieces talk to each other is published. Nothing about this arrangement relies on it being painful to walk away from.</dd>
