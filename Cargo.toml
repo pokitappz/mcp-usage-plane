@@ -5,7 +5,7 @@ members = ["sqlx-postgres-only"]
 [package]
 name = "mcp-usage-plane"
 description = "Usage and entitlement control plane for MCP servers."
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
 # Source-available under the Business Source License 1.1. Non-production use is
@@ -65,7 +65,7 @@ askama = "0.16"
 #
 # `version` as well as `path` so this resolves from crates.io when published and
 # from here when developing.
-sqlx = { package = "plane-sqlx-postgres", version = "0.1.0", path = "sqlx-postgres-only" }
+sqlx = { package = "plane-sqlx-postgres", version = "0.1.1", path = "sqlx-postgres-only" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
@@ -75,9 +75,9 @@ sha2 = "0.11.0"
 base64 = "0.23.0"
 getrandom = "0.3.4"
 hmac = "0.13.0"
-# Customer billing credentials are sealed at rest with the same AEAD and the same
-# `enc:<base64(nonce||ciphertext)>` envelope Backstock uses for POS tokens, so
-# there is one shape of sealed secret across the studio.
+# Customer billing credentials are sealed at rest with AEAD under an
+# `enc:<base64(nonce||ciphertext)>` envelope, so every sealed secret has one
+# shape wherever it is stored.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc", "getrandom"] }
 # rustls, never OpenSSL. No redirects: following a 3xx would carry a billing
 # credential to a host the allowlist never checked.

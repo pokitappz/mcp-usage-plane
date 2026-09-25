@@ -1,8 +1,10 @@
-//! Transactional email through the studio's `pokit_apps_email` service.
+//! Transactional email over HTTP.
 //!
-//! A thin `reqwest` client rather than an email SDK, matching how the sibling
-//! applications talk to the same service. There is exactly one message type
-//! today: the sign-in code.
+//! A thin `reqwest` client posting JSON to `EMAIL_SERVICE_URL` under a bearer
+//! token, rather than an SDK tied to one provider. The body carries the
+//! sender, the recipients, the subject and both body parts, so any service
+//! accepting that shape needs no code change here. There is exactly one
+//! message type today: the sign-in code.
 //!
 //! # Absent configuration is a real state
 //!

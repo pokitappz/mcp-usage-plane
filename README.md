@@ -225,11 +225,10 @@ means answering 402 at the sidecar, which is edge work, not a destination here.
 ### Credentials
 
 A customer's billing credential is sealed with ChaCha20-Poly1305 under
-`SECRET_SEALING_KEY` and stored as `enc:<base64(nonce||ciphertext)>`, the same
-envelope Backstock uses for POS tokens. It is never returned by any endpoint;
-the API reports only whether one is stored. A key that is set but malformed
-stops the service from starting rather than silently storing the next credential
-unprotected.
+`SECRET_SEALING_KEY` and stored as `enc:<base64(nonce||ciphertext)>`. It is
+never returned by any endpoint; the API reports only whether one is stored. A
+key that is set but malformed stops the service from starting rather than
+silently storing the next credential unprotected.
 
 A webhook endpoint is supplied by the customer, so it is checked against
 loopback, private and link-local ranges before anything is dialled: without that

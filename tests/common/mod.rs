@@ -1,8 +1,8 @@
 //! Harness for the database-backed integration tests.
 //!
 //! These boot the compiled binary against a scratch database and talk to it
-//! over HTTP, following the same reasoning as the Backstock suite: the things
-//! worth protecting here are stack properties, not handler properties. Scope
+//! over HTTP, because the things worth protecting here are stack properties,
+//! not handler properties. Scope
 //! enforcement is an extractor, idempotency is a primary key, and counter
 //! arithmetic is SQL. A test calling handlers directly would skip all three.
 //!

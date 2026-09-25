@@ -1,15 +1,13 @@
 //! Encryption at rest for customer billing credentials.
 //!
 //! AEAD (ChaCha20-Poly1305) with a fresh 12-byte nonce per value, stored as
-//! `enc:<base64(nonce||ciphertext)>`. The envelope and the algorithm match
-//! `recon::secret` in Backstock so the studio has one shape of sealed secret.
+//! `enc:<base64(nonce||ciphertext)>`.
 //!
-//! Two things differ deliberately. There is no legacy plaintext read path:
-//! Backstock needed one to migrate existing rows, this table has never held a
-//! plaintext credential and never will, so anything without the prefix is an
-//! error rather than a value to trust. And the key is a value loaded once at
-//! startup rather than an environment lookup on every call, so the crypto is
-//! testable without mutating process-global state.
+//! Two things are deliberate. There is no plaintext read path: this table has
+//! never held a plaintext credential and never will, so anything without the
+//! prefix is an error rather than a value to trust. And the key is a value
+//! loaded once at startup rather than an environment lookup on every call, so
+//! the crypto is testable without mutating process-global state.
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
