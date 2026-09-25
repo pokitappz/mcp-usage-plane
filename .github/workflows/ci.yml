@@ -148,12 +148,18 @@ jobs:
             sleep 1
           done
 
+          # Fetched into a variable rather than piped into grep. `grep -q` exits
+          # on the first match and closes the pipe, curl then dies with a write
+          # error, and `pipefail` turns that into a failed step. Whether it
+          # happens depends on the response size, so the piped version passed
+          # for small pages and failed for the home page.
+          #
           # `--fail` turns a 404 into a non-zero exit, which is the whole point:
           # a missing stylesheet must fail the job rather than be logged.
-          curl --silent --fail --max-time 5 http://localhost:8081/signin \
-            | grep --quiet 'Usage control plane'
-          curl --silent --fail --max-time 5 http://localhost:8081/assets/usagekit.css \
-            | grep --quiet -- '--accent'
+          body="$(curl --silent --fail --max-time 5 http://localhost:8081/signin)"
+          grep --quiet 'Usage control plane' <<<"$body"
+          body="$(curl --silent --fail --max-time 5 http://localhost:8081/assets/usagekit.css)"
+          grep --quiet -- '--accent' <<<"$body"
 
           # The marketing pages are ours and must not ship by default. `--fail`
           # makes a 404 a non-zero exit, so this asserts the absence.
@@ -182,10 +188,18 @@ jobs:
             sleep 1
           done
 
-          curl --silent --fail --max-time 5 http://localhost:8081/ \
-            | grep --quiet 'UsageKit'
-          curl --silent --fail --max-time 5 http://localhost:8081/pricing \
-            | grep --quiet 'billable events'
+          body="$(curl --silent --fail --max-time 5 http://localhost:8081/)"
+          grep --quiet 'UsageKit' <<<"$body"
+          grep --quiet '$299 a month' <<<"$body"
+
+          body="$(curl --silent --fail --max-time 5 http://localhost:8081/pricing)"
+          grep --quiet 'billable event' <<<"$body"
+          # There is no hosted service, so the image must not ship a page
+          # offering one.
+          if grep --quiet 'per 10,000' <<<"$body"; then
+            echo "the pricing page still advertises hosted per-event pricing" >&2
+            exit 1
+          fi
 
       - name: Show the container logs on failure
         if: failure()
