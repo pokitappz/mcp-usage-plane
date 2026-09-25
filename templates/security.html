@@ -4,76 +4,88 @@
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Security</p>
-    <h1>What this service holds, what it cannot hold, and what it does not yet do.</h1>
+    <h1>What we hold, what we cannot hold, and what we do not do yet.</h1>
     <p class="lede">
-      A trust page made of adjectives is worth nothing. This one is specific, it names the
-      mechanisms, and it ends with the limitations, because a page that lists only strengths tells
-      you the author was selling rather than describing.
+      A security page made of reassuring adjectives is worth nothing. This one names the actual
+      mechanisms, and it ends with a list of things this service does not do, because a page that
+      only lists strengths tells you the author was selling rather than describing.
     </p>
   </div>
 </section>
 
 <section class="section">
   <div class="wrap">
-    <p class="micro">The ledger</p>
-    <h2>Seven columns. None of them can hold your customers' content.</h2>
+    <p class="micro">Your customers' data</p>
+    <h2>There is nowhere in our database to put it.</h2>
     <p class="prose">
-      A usage event is an identifier, an account, a customer identifier, a meter label, a count of
-      units, and two timestamps. That is the whole row. There is no column for a tool name, a
-      prompt name, a resource URI, an argument, or a result, so none of them can be stored here
-      even by mistake.
+      We store counts, not content. A usage record is seven columns: an identifier, which account
+      it belongs to, which of your customers it was for, a label naming what was used, how many
+      units, and two timestamps. That is the entire row.
     </p>
     <p class="prose">
-      The two strings are yours: <code>customer_id</code> and <code>meter</code> are whatever your
-      sidecar sends. Send an opaque identifier and a meter name you chose, and nothing identifying
-      ever leaves your side. Put a customer's email in the meter label and it will be stored,
-      because this service cannot tell the difference. That is a real constraint on you, and
-      pretending otherwise would be the dishonest version of this paragraph.
+      There is no column for the name of a tool, what was asked, what came back, or which file was
+      read. Not as a policy that could be changed later, but as a fact about the shape of the
+      table: those things could not be stored here even by accident.
     </p>
     <p class="prose">
-      The meter itself is stricter still, upstream of here. Its metrics never export API keys,
-      tenant identifiers, customer identifiers, methods, or tool names, so the observability path
-      does not reintroduce what the ledger declined to store.
+      <strong>Two of those columns are yours, and that is a real constraint on you.</strong> The
+      customer identifier and the label are whatever your server sends. Send an opaque identifier
+      and a label you chose, and nothing identifying ever leaves your side. Put a customer's email
+      address in the label and it will be stored, because this service cannot tell the difference.
+      Saying otherwise would be the dishonest version of this paragraph.
+    </p>
+    <p class="prose">
+      The meter on your side is stricter still. What it reports for monitoring never includes API
+      keys, customer identifiers, method names or tool names, so the reporting path does not quietly
+      put back what the database declined to hold.
     </p>
   </div>
 </section>
 
 <section class="section section-alt">
   <div class="wrap">
-    <p class="micro">Credentials</p>
-    <h2>Nothing reusable is stored in a form that can be read back.</h2>
+    <p class="micro">Keys and passwords</p>
+    <h2>Nothing reusable is stored in a form anyone can read back.</h2>
+    <p class="prose">
+      Four separate things, each protected differently, and none of them recoverable from our side.
+    </p>
     <div class="grid grid-two">
       <article class="card">
-        <h3>Your provider keys are sealed</h3>
+        <h3>Your payment provider keys are encrypted</h3>
         <p>
-          Billing credentials are encrypted with ChaCha20-Poly1305 under a fresh 12 byte nonce per
-          value before they reach a row, in the envelope <code>enc:&lt;base64(nonce||ciphertext)&gt;</code>.
-          A key that is configured but malformed refuses to start the service rather than quietly
-          storing the next credential unprotected.
+          Encrypted before they are written down, with a fresh random value per key so two
+          identical keys do not look identical in storage.
+          <span class="aside">ChaCha20-Poly1305 with a 12 byte nonce per value, stored as
+          <code>enc:&lt;base64(nonce||ciphertext)&gt;</code>. A key that is configured but malformed
+          stops the service starting rather than quietly storing the next credential unprotected.</span>
         </p>
       </article>
       <article class="card">
-        <h3>Tokens are stored as digests</h3>
+        <h3>API keys are stored as fingerprints</h3>
         <p>
-          API tokens, tenant API keys and browser sessions are stored as SHA-256 only. A disclosure
-          of the database does not hand over a working credential, and no code path can print one
-          back to you after it is created.
+          We keep a one-way fingerprint, never the key itself, so somebody who obtained a copy of
+          the database would not get a working credential from it. Nothing in the system can print
+          one back to you after it is created; if you lose one, you replace it.
+          <span class="aside">SHA-256 lookup digests, for account tokens, customer API keys and
+          browser sessions alike.</span>
         </p>
       </article>
       <article class="card">
-        <h3>The export client refuses redirects</h3>
+        <h3>Charges are never sent somewhere else</h3>
         <p>
-          Outbound calls carrying a billing credential do not follow a 3xx, and destinations are
-          checked against an allowlist. A redirect would carry a credential to a host the
-          allowlist never saw.
+          When we send usage to your payment provider, the request will not follow a redirect to
+          another address, and the destination is checked against a list first. A redirect is the
+          easy way to walk a credential somewhere nobody reviewed.
         </p>
       </article>
       <article class="card">
-        <h3>Sessions are opaque and revocable</h3>
+        <h3>There is no password to steal</h3>
         <p>
-          Sign in is passwordless. The cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>,
-          it is <code>Secure</code> wherever the service is reachable over https, and it is a
-          server side row that can be revoked rather than a self describing token that cannot.
+          Signing in emails you a six digit code. There is no password to reuse, leak or reset. The
+          resulting session can be revoked from our side, unlike a token that simply expires
+          whenever it feels like it.
+          <span class="aside">Cookie is <code>HttpOnly</code> and <code>SameSite=Lax</code>, and
+          <code>Secure</code> wherever the service is reachable over https.</span>
         </p>
       </article>
     </div>
@@ -82,40 +94,50 @@
 
 <section class="section">
   <div class="wrap">
-    <p class="micro">The browser surface</p>
-    <h2>The pages you are reading enforce their own rules.</h2>
+    <p class="micro">These pages</p>
+    <h2>The site enforces its own rules, and a test proves it.</h2>
     <p class="prose">
-      Every response carries a content security policy with no <code>unsafe-inline</code> and no
-      <code>unsafe-eval</code>, for scripts and for styles. There is not one inline handler or one
-      inline style on this site, which is why the policy can be that strict, and a test renders
-      every page and fails the build if one appears. <code>frame-ancestors 'none'</code> and
-      <code>form-action 'self'</code> close the two holes that matter for a dashboard.
+      Every page we serve tells your browser to refuse any code that did not come from us, and we
+      hold ourselves to that: there is not one line of script or styling embedded in the pages
+      themselves. That is what allows the rule to be set as strictly as it is.
     </p>
     <p class="prose">
-      State changing requests are checked against the configured origin, and an absent
-      <code>Origin</code> header is refused rather than assumed friendly. Dashboard pages are served
-      <code>no-store</code> so a shared cache never holds one account's figures.
+      It is enforced rather than intended. A test renders every page on this site and fails the
+      build if an inline script, style or handler appears in any of them, because a rule the pages
+      quietly break is worse than no rule: it looks like protection and reports nothing.
+      <span class="aside">A content security policy with no <code>unsafe-inline</code> and no
+      <code>unsafe-eval</code>, plus <code>frame-ancestors 'none'</code> and
+      <code>form-action 'self'</code>.</span>
+    </p>
+    <p class="prose">
+      Anything that changes your data is checked against where the request came from, and a request
+      that does not say is refused rather than assumed friendly. Dashboard pages are marked so that
+      no shared cache or proxy ever keeps a copy of one account's figures.
     </p>
   </div>
 </section>
 
 <section class="section section-alt">
   <div class="wrap">
-    <p class="micro">Bounds</p>
-    <h2>Every unauthenticated surface has a ceiling.</h2>
+    <p class="micro">Limits</p>
+    <h2>Every way in has a ceiling on it.</h2>
+    <p class="prose">
+      Mostly so that one badly behaved client, or somebody deliberately trying, cannot degrade the
+      service for everyone else.
+    </p>
     <div class="panel">
       <table class="figures">
-        <caption class="visually-hidden">Limits applied to requests</caption>
+        <caption class="visually-hidden">Limits applied to incoming requests</caption>
         <thead>
-          <tr><th scope="col">Surface</th><th scope="col">Bound</th></tr>
+          <tr><th scope="col">What</th><th scope="col">Limit</th></tr>
         </thead>
         <tbody>
-          <tr><th scope="row">Request body</th><td>64 KiB on every route except the sidecar's usage post, which is raised deliberately for batches</td></tr>
-          <tr><th scope="row">Request duration</th><td>30 seconds, applied outermost so a slow body cannot hold a pool connection open</td></tr>
-          <tr><th scope="row">Database queries</th><td>15 second statement timeout, set per connection</td></tr>
-          <tr><th scope="row">Failed authentication</th><td>Counted process wide rather than per credential, so working through a list of tokens does not get a fresh allowance per guess</td></tr>
-          <tr><th scope="row">Sign in codes</th><td>Six digits, ten minute lifetime, five attempts, one per address per minute</td></tr>
-          <tr><th scope="row">Access requests</th><td>Rate limited against a fixed key, so the form cannot be used to send mail in volume</td></tr>
+          <tr><th scope="row">How much a request may send</th><td>64 KiB, except usage reports from your servers, which are deliberately allowed to be larger</td></tr>
+          <tr><th scope="row">How long a request may take</th><td>30 seconds, applied outermost, so a slow client cannot hold a database connection open indefinitely</td></tr>
+          <tr><th scope="row">How long a database query may run</th><td>15 seconds, set on every connection</td></tr>
+          <tr><th scope="row">Failed sign-ins with a bad key</th><td>Counted across the whole service rather than per key, so working through a list of guesses does not earn a fresh allowance for each one</td></tr>
+          <tr><th scope="row">Sign-in codes</th><td>Six digits, valid for ten minutes, five attempts, and one code per address per minute</td></tr>
+          <tr><th scope="row">The access request form</th><td>Rate limited on a fixed key, so it cannot be used to send mail in volume</td></tr>
         </tbody>
       </table>
     </div>
@@ -124,56 +146,59 @@
 
 <section class="section">
   <div class="wrap">
-    <p class="micro">Auditability</p>
-    <h2>You can read the part that decides what you owe.</h2>
+    <p class="micro">Checking our work</p>
+    <h2>The part that decides what you owe is open source.</h2>
     <p class="prose">
-      The metering rules are not in this service. They are in
-      <a href="https://github.com/pokitappz/mcp-usage-kit">Apache-2.0 crates</a> published on
-      crates.io, and the classification behaviour is pinned by versioned conformance vectors in
-      plain JSON that a gateway in any language can run. If you think a call was billed that should
-      not have been, that is a claim you can check against source rather than a support ticket you
-      have to win.
+      The rules that decide what counts as billable are not hidden in this service. They live in
+      <a href="https://github.com/pokitappz/mcp-usage-kit">open source code</a> anyone can read, and
+      the behaviour is pinned by a published set of test cases in plain JSON that software written
+      in any language can run against.
+    </p>
+    <p class="prose">
+      If you think something was billed that should not have been, that is a question you can
+      settle by reading the code, rather than a support ticket you have to win.
     </p>
   </div>
 </section>
 
 <section class="section section-alt">
   <div class="wrap narrow-wrap">
-    <p class="micro">Limitations</p>
-    <h2>What this does not do yet.</h2>
+    <p class="micro">What we do not do</p>
+    <h2>Things worth knowing before you decide.</h2>
     <p class="prose">
-      This is a young service. The following are true today, and they are here because you should
-      decide with them in view rather than discover them later.
+      This is a young service. All of the following are true today, and they are here so you can
+      weigh them now rather than find them later.
     </p>
     <ul class="limits">
       <li>
-        <strong>Single region.</strong> One deployment, one database. There is no data residency
-        choice and no multi region failover. An outage here is an outage for everyone, which is
-        why the sidecar is built to keep serving from its last snapshot without us.
+        <strong>One location.</strong> A single deployment and a single database. You cannot choose
+        where your data lives, and there is no automatic failover. An outage here is an outage for
+        everyone, which is exactly why your own server is built to keep serving customers from its
+        cached copy without us.
       </li>
       <li>
-        <strong>Subscription status does not gate service.</strong> The plane records whether an
-        account is active, past due or canceled, and nothing reads it to refuse service. A canceled
-        account continues to be served. That is deliberate for now, and it is stated because the
-        opposite assumption is the dangerous one.
+        <strong>We do not cut off unpaid accounts.</strong> The service records whether an account
+        is paying, past due or cancelled, and nothing reads that to refuse service. A cancelled
+        account carries on working. That is deliberate for now, and it is written here because
+        assuming the opposite is the expensive mistake.
       </li>
       <li>
-        <strong>No customer managed encryption keys.</strong> The sealing key is held by the
-        service. Sealing protects against a database disclosure, not against the operator.
+        <strong>We hold the encryption key.</strong> You cannot bring your own. Encrypting your
+        payment keys protects you if the database is stolen; it does not protect you from us.
       </li>
       <li>
-        <strong>No audit log of human actions yet.</strong> Sessions are attributable to a person,
-        and nothing currently records who changed a price or revoked a token. The schema was built
-        to carry it; the recording is not written.
+        <strong>No record of who changed what.</strong> Sign-ins identify a person, and nothing
+        currently writes down who changed a price or revoked a key. The database was built to carry
+        that; the recording is not written yet.
       </li>
       <li>
-        <strong>No independent security assessment.</strong> Nobody outside has audited this. When
-        that changes it will be said here with a date and a name, and not before.
+        <strong>Nobody independent has audited this.</strong> There has been no external security
+        assessment. When that changes it will be said here, with a date and a name, and not before.
       </li>
     </ul>
     <p class="prose">
-      Found something wrong? Mail <a href="mailto:support@pokitapps.com">support@pokitapps.com</a>.
-      Reports about the open source crates belong in the
+      Found something wrong? Email <a href="mailto:support@pokitapps.com">support@pokitapps.com</a>.
+      Anything about the open source code belongs in its
       <a href="https://github.com/pokitappz/mcp-usage-kit/security/policy">published security policy</a>.
     </p>
   </div>

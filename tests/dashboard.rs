@@ -15,6 +15,19 @@
 mod common;
 
 use common::Plane;
+
+/// Strings that appear on the dashboard and nowhere a stranger can reach.
+///
+/// The gating test asserts these are **absent** for an anonymous caller, which
+/// is only worth something while they are present for a real one. Renaming a
+/// panel without updating this list would otherwise turn that test into an
+/// assertion about nothing, silently, and it would stay green forever. So the
+/// test checks both directions against this one list.
+const DASHBOARD_MARKERS: [&str; 3] = [
+    "Billable events",
+    "API credentials",
+    "Usage and spending limits",
+];
 use serde_json::json;
 
 struct Page {
@@ -172,14 +185,12 @@ async fn the_dashboard_is_gated_by_the_server_and_not_by_the_browser() {
     let anonymous = get(&plane, "/app", None).await;
     assert_eq!(anonymous.status, 303);
     assert_eq!(header(&anonymous, "location"), "/signin");
-    assert!(
-        !anonymous.body.contains("Metered events"),
-        "the dashboard markup reached an anonymous caller"
-    );
-    assert!(
-        !anonymous.body.contains("API credentials"),
-        "panel names reached an anonymous caller"
-    );
+    for marker in DASHBOARD_MARKERS {
+        assert!(
+            !anonymous.body.contains(marker),
+            "the dashboard markup reached an anonymous caller: found {marker:?}"
+        );
+    }
 
     // A bearer token authenticates a machine, not a person. It must not open a
     // browser session, whatever it is allowed to do on the JSON API.
@@ -198,7 +209,26 @@ async fn the_dashboard_is_gated_by_the_server_and_not_by_the_browser() {
     // A cookie that is not a session must not either.
     let forged = get(&plane, "/app", Some("usagekit_session=not-a-real-session")).await;
     assert_eq!(forged.status, 303);
-    assert!(!forged.body.contains("API credentials"));
+    for marker in DASHBOARD_MARKERS {
+        assert!(
+            !forged.body.contains(marker),
+            "{marker:?} reached a forged cookie"
+        );
+    }
+
+    // And the other direction, in this same test: the markers have to actually
+    // be on the real dashboard. Without this, renaming a panel would turn every
+    // assertion above into a statement about a string that no longer exists,
+    // and the test would keep passing while testing nothing.
+    let cookie = sign_in(&plane, "owner@example.com").await;
+    let real = get(&plane, "/app", Some(&cookie)).await;
+    assert_eq!(real.status, 200);
+    for marker in DASHBOARD_MARKERS {
+        assert!(
+            real.body.contains(marker),
+            "{marker:?} is no longer on the dashboard, so the checks above prove nothing"
+        );
+    }
 }
 
 #[tokio::test]
@@ -213,10 +243,10 @@ async fn a_signed_in_person_sees_their_account() {
 
     for panel in [
         "Usage",
-        "Quota and spend caps",
+        "Usage and spending limits",
         "What you have been charged",
         "Your customers",
-        "Export",
+        "Where the money goes",
         "API credentials",
     ] {
         assert!(page.body.contains(panel), "the {panel} panel is missing");
@@ -298,12 +328,12 @@ async fn an_empty_account_says_so_rather_than_rendering_blank_tables() {
 
     let page = get(&plane, "/app", Some(&cookie)).await;
     assert!(page.body.contains("No usage recorded"));
-    assert!(page.body.contains("No period has closed yet"));
+    assert!(page.body.contains("No month has been billed yet"));
     // An account with no terms is told so. Showing "$0.00" would read as free
     // terms, which is a different thing from no terms.
     assert!(
-        page.body.contains("No terms are set"),
-        "an account with no terms should be told, not shown zero"
+        page.body.contains("No prices are set"),
+        "an account with no prices should be told, not shown zero"
     );
 }
 
@@ -397,7 +427,7 @@ async fn the_last_admin_token_cannot_be_revoked_from_the_dashboard_either() {
     assert_eq!(status, 200, "the last admin token was revoked anyway");
 
     let page = get(&plane, "/app?done=last-admin", Some(&cookie)).await;
-    assert!(page.body.contains("last live admin token"));
+    assert!(page.body.contains("last working admin key"));
 }
 
 #[tokio::test]
@@ -428,8 +458,8 @@ async fn a_dead_letter_can_be_resolved_and_leaves_the_queue() {
     // banner rather than being a number in a corner.
     let page = get(&plane, "/app", Some(&cookie)).await;
     assert!(
-        page.body.contains("never delivered"),
-        "no dead letter banner"
+        page.body.contains("could not be billed"),
+        "no banner for usage that failed to bill"
     );
     assert!(page.body.contains("agg-dead") || page.body.contains("cus_acme"));
 
@@ -446,8 +476,8 @@ async fn a_dead_letter_can_be_resolved_and_leaves_the_queue() {
 
     let page = get(&plane, "/app", Some(&cookie)).await;
     assert!(
-        !page.body.contains("never delivered"),
-        "the banner is still showing after the queue was cleared"
+        !page.body.contains("could not be billed"),
+        "the banner is still showing after the list was cleared"
     );
     // And the page is honest about what resolving did.
     let after = get(&plane, "/app?done=resolved", Some(&cookie)).await;
@@ -581,6 +611,88 @@ async fn a_signed_in_person_is_not_asked_to_sign_in_again() {
 }
 
 // ------------------------------------------------------------- discipline
+
+#[tokio::test]
+async fn the_dashboard_uses_the_same_words_the_public_pages_do() {
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+    let cookie = sign_in(&plane, "owner@example.com").await;
+    let key = plane.seed_tenant("acme", "cus_acme").await;
+
+    // Seed the states that only render when something is wrong, because those
+    // are exactly the labels written in a hurry and the ones a customer reads
+    // when they are already annoyed.
+    //
+    // A customer over their limit is one of them. Without pushing one over,
+    // the "why is this blocked" cell never renders and the check below would
+    // pass without ever looking at it.
+    let (status, _) = plane
+        .admin(
+            reqwest::Method::PATCH,
+            "/v1/tenants/acme",
+            Some(json!({"max_units": 10})),
+        )
+        .await;
+    assert_eq!(status, 200, "could not set a usage limit");
+    let (status, _) = plane
+        .send(
+            reqwest::Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [{
+                "identifier": "agg-over", "customer_id": "cus_acme", "meter": "calls",
+                "units": 50, "timestamp": chrono::Utc::now().timestamp()
+            }]})),
+            Some(common::EDGE_TOKEN),
+        )
+        .await;
+    assert_eq!(status, 200, "could not push the customer over their limit");
+    let _ = &key;
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&plane.db_url)
+        .await
+        .expect("connect to the scratch database");
+    sqlx::query(
+        "INSERT INTO export_dead_letters
+             (account_id, identifier, customer_id, meter, units, event_at,
+              direction, destination, reason)
+         VALUES ($1, 'agg-dead', 'cus_acme', 'calls', 42, NOW(),
+                 'downstream', 'stripe', 'rejected')",
+    )
+    .bind(common::ACCOUNT)
+    .execute(&pool)
+    .await
+    .expect("insert a dead letter");
+    pool.close().await;
+
+    // Same list as the public site keeps, for the same reason: the vocabulary
+    // drifts back one sentence at a time and each reintroduction looks
+    // harmless on its own.
+    let retired = [
+        "the plane",
+        "sidecar",
+        "dead letter",
+        "terminal delivery",
+        "metered event",
+        "hot path",
+        "price book",
+        "reconcil",
+        "admitting",
+        // Library variant names and internal direction labels were reaching
+        // the page verbatim: a customer was shown "QuotaExceeded".
+        "quotaexceeded",
+        "spendcapexceeded",
+        "downstream",
+        "upstream",
+    ];
+
+    for (label, path) in [("dashboard", "/app"), ("notice", "/app?done=resolved")] {
+        let body = get(&plane, path, Some(&cookie)).await.body.to_lowercase();
+        for term in retired {
+            assert!(!body.contains(term), "the {label} still says {term:?}");
+        }
+    }
+}
 
 #[tokio::test]
 async fn the_dashboard_holds_to_the_same_markup_rules_as_the_public_pages() {

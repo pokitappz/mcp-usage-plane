@@ -5,7 +5,8 @@
     <p class="eyebrow">Sign in</p>
     <h1>Check your email.</h1>
     <p class="lede">
-      If that address has an account, a six digit code is on its way. It expires in ten minutes.
+      If that address has an account, a six digit code is on its way. It stops working after ten
+      minutes.
     </p>
 
     {% match notice %}
@@ -17,8 +18,8 @@
     {% match development_code %}
     {% when Some with (code) %}
     <p class="notice notice-warn" role="status">
-      Email is not configured on this deployment, so the code is shown here instead:
-      <strong>{{ code }}</strong>. This happens only in a debug build.
+      Email is not set up on this deployment, so the code is shown here instead:
+      <strong>{{ code }}</strong>. This only ever happens in a development build.
     </p>
     {% when None %}
     {% endmatch %}

@@ -158,6 +158,91 @@ async fn nothing_served_carries_an_em_dash_or_en_dash() {
     }
 }
 
+/// Words that were removed from customer-facing copy, and why.
+///
+/// Every one of these is either internal vocabulary ("the plane"), a second
+/// name for something that already has one, or a term of art a buyer has no
+/// reason to know. They were replaced rather than explained, because the site
+/// previously used four different words for one concept and that is most of
+/// what made it unreadable.
+const RETIRED_TERMS: [(&str, &str); 8] = [
+    (
+        "the plane",
+        "internal shorthand for the control plane; say UsageKit Cloud",
+    ),
+    ("sidecar", "say a proxy in front of your server"),
+    ("dead letter", "say usage that could not be billed"),
+    (
+        "terminal delivery",
+        "say a result your customer actually received",
+    ),
+    ("metered event", "say billable event"),
+    ("hot path", "say your live traffic"),
+    ("price book", "say what each customer pays"),
+    ("reconcil", "say handled, or could not be billed"),
+];
+
+#[tokio::test]
+async fn the_pages_use_one_word_per_concept() {
+    let url = require_db!();
+    let plane = Plane::start(&url).await;
+
+    // A vocabulary this size drifts back one sentence at a time, and each
+    // individual reintroduction looks harmless in a diff. Checking the rendered
+    // pages is the only place it stays visible.
+    //
+    // The dashboard is checked in the dashboard suite, which can sign in.
+    for path in PUBLIC_PAGES
+        .iter()
+        .chain(["/nothing-is-here", "/signin"].iter())
+    {
+        let page = get(&plane, path).await;
+        let body = page.body.to_lowercase();
+        for (term, instead) in RETIRED_TERMS {
+            assert!(
+                !body.contains(term),
+                "{path} still says {term:?}; {instead}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_home_page_answers_a_buyer_before_it_answers_an_engineer() {
+    let url = require_db!();
+    let plane = Plane::start(&url).await;
+    let home = get(&plane, "/").await;
+    let body = &home.body;
+
+    // The three things a non-technical reader needs and the page did not used
+    // to give them: what it costs, what the problem costs, and what MCP is.
+    assert!(
+        body.contains("$0.50 per 10,000 billable events"),
+        "the price is not on the home page, so a buyer has to go looking for it"
+    );
+    assert!(
+        body.contains("Model Context Protocol"),
+        "MCP is never expanded, so a reader who does not know it cannot start"
+    );
+    assert!(
+        body.contains("$3.04 of real usage billed as $9.06"),
+        "the measurement is never turned into money"
+    );
+
+    // And the proof a technical reader needs is still on the same page rather
+    // than having been softened away.
+    assert!(
+        body.contains("cargo run -p mcp-overbilling"),
+        "the reproduce-it-yourself command was lost in the rewrite"
+    );
+    for figure in ["45", "152", "453"] {
+        assert!(
+            body.contains(figure),
+            "the measurement lost the figure {figure}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn every_response_carries_the_security_headers() {
     let url = require_db!();

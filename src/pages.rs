@@ -231,10 +231,10 @@ fn notice_for(query: &HomeQuery) -> (Option<&'static str>, &'static str) {
     let message = match query.error.as_deref() {
         Some("email") => "That email address does not look valid. Please check it and try again.",
         Some("throttled") => {
-            "That is more requests than this form accepts right now. Please try again in a minute."
+            "That is more requests than we accept in one go. Please wait a minute and try again."
         }
         Some("internal") => {
-            "Something on our side failed to record that. Please try again, or mail \
+            "Something on our side failed to save that. Please try again, or email \
              support@pokitapps.com directly."
         }
         _ => return (None, ""),
@@ -249,10 +249,10 @@ async fn home(State(state): State<AppState>, Query(query): Query<HomeQuery>) -> 
             shell: Shell::new(
                 &state,
                 "/",
-                "Metered billing for MCP servers",
-                "UsageKit Cloud is the hosted control plane for the Apache-2.0 UsageKit meter: \
-                 a durable usage ledger, provider exports with retry, and monthly period close \
-                 for MCP servers.",
+                "Usage billing for MCP servers",
+                "Bill your MCP customers for what they actually received, not for every HTTP \
+                 request. Usage records, automatic charging, and a monthly bill you do not have \
+                 to assemble by hand.",
             ),
             notice,
             notice_kind,
@@ -268,8 +268,8 @@ async fn pricing(State(state): State<AppState>) -> Response {
                 &state,
                 "/pricing",
                 "Pricing",
-                "$0.50 per 10,000 metered events, free under 50,000 a month. A metered event is \
-                 one terminal delivery, not one HTTP request.",
+                "$0.50 per 10,000 billable events, free under 50,000 a month. A billable event \
+                 is one result your customer actually received, not one HTTP request.",
             ),
         },
         StatusCode::OK,
@@ -283,8 +283,8 @@ async fn security(State(state): State<AppState>) -> Response {
                 &state,
                 "/security",
                 "Security",
-                "What the UsageKit Cloud ledger holds, how credentials are sealed, the bounds on \
-                 every surface, and the limitations that apply today.",
+                "What UsageKit Cloud stores about your customers, how your payment keys are \
+                 encrypted, the limits on every request, and what this service does not do yet.",
             ),
         },
         StatusCode::OK,
@@ -298,8 +298,8 @@ async fn docs(State(state): State<AppState>) -> Response {
                 &state,
                 "/docs",
                 "Docs",
-                "How to meter an MCP server with the Apache-2.0 UsageKit crates, and how to point \
-                 the sidecar at the hosted control plane.",
+                "How to measure usage in an MCP server with the open source UsageKit crates, \
+                 and how to connect it to UsageKit Cloud.",
             ),
         },
         StatusCode::OK,
@@ -324,7 +324,7 @@ pub async fn not_found(State(state): State<AppState>) -> Response {
             eyebrow: "404",
             heading: "There is nothing at that address.",
             message: "The link may be out of date, or the page may have moved. \
-                      The pages below are the ones that exist.",
+                      Everything that does exist is linked below.",
         },
         StatusCode::NOT_FOUND,
     )

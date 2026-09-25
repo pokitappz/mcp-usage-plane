@@ -4,179 +4,252 @@
 <section class="hero">
   <div class="wrap">
     <p class="eyebrow">UsageKit Cloud</p>
-    <h1>Bill MCP usage correctly, without operating the billing infrastructure.</h1>
+    <h1>Stop overcharging your MCP customers.</h1>
     <p class="lede">
-      The UsageKit meter is Apache-2.0 and works with no account. Add the Tower layer or run the
-      sidecar and your counts are right today, with nothing reporting to us.
-      UsageKit Cloud is the other half: the durable ledger, the export retries, the dead letter
-      queue, and the period arithmetic you would otherwise build and then carry.
+      If you bill per API request, you are charging about three times what you should. We measured
+      it, the test is public, and sooner or later a customer will measure it too. UsageKit Cloud
+      counts what your customers actually received, and turns that into an invoice you do not have
+      to watch over.
     </p>
+
+    <p class="price-strip">
+      <strong>$0.50 per 10,000 billable events.</strong>
+      Free under 50,000 a month.
+      <a href="/pricing">See the full pricing</a>
+    </p>
+
     <div class="hero-actions">
       <a class="button" href="#request-access">Request access</a>
-      <a class="button button-quiet" href="https://github.com/pokitappz/mcp-usage-kit">Start with the free meter</a>
+      <a class="button button-quiet" href="#the-numbers">Show me the numbers</a>
     </div>
     <p class="hero-foot">
-      No credit card, because there is no self-serve signup. Access is granted by hand while the
-      service is young, and the free meter never requires it.
+      No card, and no instant signup. We set up accounts by hand at the moment, so you will hear
+      from a person rather than a sequence of emails.
     </p>
   </div>
 </section>
 
-<section class="section">
+<!-- ------------------------------------------------------- is this you -->
+<section class="section section-alt">
   <div class="wrap">
-    <p class="micro">The problem, measured</p>
-    <h2>Counting HTTP requests overbills real MCP traffic by 2.98x.</h2>
+    <p class="micro">Why this matters</p>
+    <h2>Three ways billing goes wrong, and what each one costs.</h2>
     <p class="prose">
-      MCP is not one request per billable unit. A multi round trip call is several requests and one
-      result. Task polling is a dozen requests and one result. A failed call is a request and
-      nothing delivered. Bill per request and the invoice is wrong in the customer's disfavour,
-      which is the expensive direction to be wrong in.
+      MCP, the Model Context Protocol, is how AI assistants call your software. It does not map
+      neatly onto requests, which is where the trouble starts.
+    </p>
+
+    <div class="grid grid-three">
+      <article class="card">
+        <h3>A customer questions their bill</h3>
+        <p>
+          You cannot show them, line by line, what they were charged for. So you credit the invoice
+          and hope it does not come up again. It usually does.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Somebody adds it up by hand</h3>
+        <p>
+          A query, a spreadsheet, a careful copy and paste into Stripe on the first of the month.
+          It works right up until that person is on holiday or leaves.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Money quietly goes missing</h3>
+        <p>
+          Usage that fails to reach your payment provider does not look like an error. The work
+          happened, the customer used it, and no invoice was ever raised for it.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ------------------------------------------------------------ the proof -->
+<section class="section" id="the-numbers">
+  <div class="wrap">
+    <p class="micro">The measurement</p>
+    <h2>Charging per request overcharges by about three times.</h2>
+    <p class="prose">
+      One question from a customer is rarely one request. It can be a dozen: the assistant looks up
+      what your tools do, asks a question, comes back for more detail, then waits while a long job
+      finishes. A request that fails delivers nothing at all. Charge per request and you charge for
+      every one of those.
     </p>
     <p class="prose">
-      That is a measurable claim, so it is measured. The comparison below runs against the
-      strongest version of a request counter: one that reads <code>Mcp-Name</code> and applies your
-      own price book per request, blind only to what came back.
+      That is a claim about numbers, so here are the numbers. The same traffic, billed two ways,
+      against the fairest possible version of request counting.
     </p>
 
     <div class="panel">
       <table class="figures">
-        <caption class="visually-hidden">Identical MCP traffic billed two ways</caption>
+        <caption class="visually-hidden">The same MCP traffic billed two ways</caption>
         <thead>
           <tr>
-            <th scope="col">Scenario</th>
-            <th scope="col" class="numeric">HTTP requests</th>
-            <th scope="col" class="numeric">Correct</th>
-            <th scope="col" class="numeric">Request counting</th>
+            <th scope="col">What the customer did</th>
+            <th scope="col" class="numeric">Requests</th>
+            <th scope="col" class="numeric">Should be charged</th>
+            <th scope="col" class="numeric">Per-request billing charges</th>
           </tr>
         </thead>
         <tbody>
-          <tr><th scope="row">Discovery</th><td class="numeric">7</td><td class="numeric">0</td><td class="numeric">7</td></tr>
-          <tr><th scope="row">Multi round trip</th><td class="numeric">8</td><td class="numeric">35</td><td class="numeric">155</td></tr>
-          <tr><th scope="row">Task polling</th><td class="numeric">12</td><td class="numeric">40</td><td class="numeric">80</td></tr>
-          <tr><th scope="row">Errors</th><td class="numeric">9</td><td class="numeric">5</td><td class="numeric">135</td></tr>
-          <tr><th scope="row">Retries</th><td class="numeric">9</td><td class="numeric">72</td><td class="numeric">76</td></tr>
+          <tr><th scope="row">Looked up what your tools do</th><td class="numeric">7</td><td class="numeric">0</td><td class="numeric">7</td></tr>
+          <tr><th scope="row">Asked something that took a few rounds</th><td class="numeric">8</td><td class="numeric">35</td><td class="numeric">155</td></tr>
+          <tr><th scope="row">Waited for a long job to finish</th><td class="numeric">12</td><td class="numeric">40</td><td class="numeric">80</td></tr>
+          <tr><th scope="row">Hit errors and got nothing back</th><td class="numeric">9</td><td class="numeric">5</td><td class="numeric">135</td></tr>
+          <tr><th scope="row">Retried after a failure</th><td class="numeric">9</td><td class="numeric">72</td><td class="numeric">76</td></tr>
         </tbody>
         <tfoot>
           <tr><th scope="row">Total</th><td class="numeric">45</td><td class="numeric">152</td><td class="numeric">453</td></tr>
         </tfoot>
       </table>
+
+      <p class="panel-highlight">
+        At two cents a call, that is <strong>$3.04 of real usage billed as $9.06</strong>. Your
+        customer paid three times over, mostly for calls that failed and for questions your own
+        software asked itself.
+      </p>
+
       <p class="panel-foot">
-        Reproduce it yourself, from a clone, in under a minute:
+        You do not have to take our word for it. Clone the open source project and run it:
         <code class="command">cargo run -p mcp-overbilling</code>
-        The harness also contains traffic where request counting is correct, because a comparison
-        built only from cases that favour one answer is not evidence.
+        The same test also includes traffic where charging per request happens to be correct,
+        because a comparison built only from examples that suit us would not be worth showing you.
       </p>
     </div>
   </div>
 </section>
 
+<!-- ----------------------------------------------------------- what you get -->
 <section class="section section-alt">
   <div class="wrap">
-    <p class="micro">What the free meter already does</p>
-    <h2>The counting problem is solved, and it is not ours to sell back to you.</h2>
+    <p class="micro">What you get</p>
+    <h2>Getting the number right is the easy part.</h2>
     <p class="prose">
-      <code>mcp-usage-kit</code> records usage only after it observes a terminal result. Interim
-      results bill nothing. Task creation and progress polls bill nothing. A completed task bills
-      the originating tool once, keyed on its <code>taskId</code>. Errors, cancellations, discovery
-      and subscription traffic are free. It is Apache-2.0, published on crates.io, and the
-      conformance vectors are machine readable JSON that a gateway in any language can reuse.
-    </p>
-    <p class="prose">
-      If that is all you need, take it and go. It will not phone home, it has no licence key, and
-      nothing here is gated behind an account.
-    </p>
-  </div>
-</section>
-
-<section class="section">
-  <div class="wrap">
-    <p class="micro">What UsageKit Cloud is for</p>
-    <h2>Correct counts are the easy half. The other half runs at 3am.</h2>
-    <p class="prose">
-      A meter produces numbers in a process. Turning those numbers into money that arrives, every
-      month, without anyone watching, is a different system. This is that system, and it is what
-      you would otherwise write.
+      Counting correctly takes an afternoon. Making sure that count becomes money in your account,
+      every month, without anyone remembering to check, is the part that takes a year and then
+      wakes somebody up at 3am. That is what this is.
     </p>
 
     <div class="grid grid-three">
       <article class="card">
-        <h3>A ledger that survives the process</h3>
+        <h3>Every charge can be explained</h3>
         <p>
-          Idempotent usage aggregates posted from any number of sidecars, deduplicated on their
-          stable identifiers, in Postgres. Restart a sidecar mid batch and the counts do not move.
+          Each billable event is stored with the customer it belongs to and when it happened. When
+          someone questions an invoice you can answer from the record. Send the same usage twice,
+          from any number of servers, and it still only counts once.
         </p>
       </article>
       <article class="card">
-        <h3>Exports that retry, and a queue when they cannot</h3>
+        <h3>Failed charges do not vanish</h3>
         <p>
-          A provider that is down does not lose a month of revenue. Permanent rejections land in a
-          bounded dead letter queue that is visible in the dashboard, because silently dropped
-          usage is silently dropped money.
+          If your payment provider is unreachable we keep trying. If it refuses something outright,
+          that usage goes on a list you can actually see, because the alternative is revenue
+          disappearing without anyone noticing.
         </p>
       </article>
       <article class="card">
-        <h3>Period close, not a per unit drip</h3>
+        <h3>One bill a month</h3>
         <p>
-          Usage is charged once per closed period, in integer micros, with the floor and the
-          included allowance applied in one place. A period cannot be charged twice however often
-          the close runs.
+          Usage is charged once, after the month ends, rather than trickling out all month long.
+          Running it twice cannot bill the same month twice, which matters the first time a deploy
+          restarts halfway through.
         </p>
       </article>
       <article class="card">
-        <h3>Credentials sealed at rest</h3>
+        <h3>Your payment keys stay secret</h3>
         <p>
-          Your provider keys are sealed with ChaCha20-Poly1305 before they touch a row, and the
-          export client refuses redirects so a credential cannot be carried to a host nobody
-          reviewed.
+          Your Stripe key is encrypted before it is written down and cannot be read back out, by
+          you, by us, or by anyone holding a copy of the database. The
+          <a href="/security">security page</a> names the algorithm.
         </p>
       </article>
       <article class="card">
-        <h3>Price books per customer</h3>
+        <h3>Different prices for different customers</h3>
         <p>
-          Tenants, their prices, their quotas and their spend caps, served to your sidecars as a
-          snapshot they can cache. Your hot path keeps serving when this service does not.
+          Set what each customer pays, how much they may use, and how much they may spend. Your own
+          server keeps a cached copy of all of it, so if we have an outage your customers carry on
+          being served.
         </p>
       </article>
       <article class="card">
-        <h3>A dashboard instead of a psql prompt</h3>
+        <h3>You can see all of it</h3>
         <p>
-          Usage by customer and meter, quota against limits, what each period was charged, and
-          which exports failed. The numbers on the page are the numbers the API returns.
+          Usage by customer, who is near their limit, what each month was charged, and anything
+          that failed to bill. The figures on screen are the same ones the API returns, because
+          they come from the same query.
         </p>
       </article>
     </div>
   </div>
 </section>
 
-<section class="section section-alt">
+<!-- ------------------------------------------------------------ how it works -->
+<section class="section">
   <div class="wrap narrow-wrap">
-    <p class="micro">How it fits</p>
-    <h2>Three steps, and your hot path does not depend on us.</h2>
+    <p class="micro">How it works</p>
+    <h2>Three steps, and your customers never depend on us.</h2>
     <ol class="steps">
       <li>
-        <h3>Meter where your server already is</h3>
-        <p>Add the Tower layer in a Rust MCP server, or run the <code>mcp-usage-edge</code> sidecar in front of a server written in anything else.</p>
+        <h3>Measure usage where your server already runs</h3>
+        <p>
+          Add one line to a Rust server, or run a small proxy in front of a server written in
+          anything else. <span class="aside">For engineers: a Tower layer, or the
+          <code>mcp-usage-edge</code> proxy.</span>
+        </p>
       </li>
       <li>
-        <h3>Point it at the plane</h3>
-        <p>The sidecar pulls a snapshot of who may call and at what price, and posts idempotent aggregates back. Both directions are pull based and free of session state, so an outage here degrades to the last snapshot rather than to an error.</p>
+        <h3>Connect it to UsageKit Cloud</h3>
+        <p>
+          Your server asks us who is allowed to call and what they pay, then reports back what was
+          actually delivered. It keeps a cached copy of the answer, so if we are unavailable your
+          customers keep being served from it rather than seeing an error.
+        </p>
       </li>
       <li>
-        <h3>Connect your provider</h3>
-        <p>The plane closes each period and submits the charge. You watch it in the dashboard rather than in a log.</p>
+        <h3>We turn it into invoices</h3>
+        <p>
+          At the end of each month we work out what each customer owes and send it to Stripe. You
+          watch that happen on a screen instead of reading a log file.
+        </p>
       </li>
     </ol>
   </div>
 </section>
 
+<!-- ------------------------------------------------------------ open source -->
+<section class="section section-alt">
+  <div class="wrap narrow-wrap">
+    <p class="micro">The honest part</p>
+    <h2>The measuring half is free, and stays free.</h2>
+    <p class="prose">
+      The meter itself is open source under Apache-2.0 and published for anyone to use. It has no
+      licence key, it does not report anything back to us, and it works with no account. If all you
+      need is the correct number, take it and go. We would rather you did that than pay us for
+      something you do not need.
+    </p>
+    <p class="prose">
+      What you would be paying for here is the other half: the permanent record, the retries when
+      your payment provider is down, the monthly billing run, and somewhere to watch it all
+      happening. That is the part that is genuinely tedious to build and worse to be responsible
+      for at the end of a quarter.
+    </p>
+    <div class="hero-actions">
+      <a class="button button-quiet" href="https://github.com/pokitappz/mcp-usage-kit">Take the free meter</a>
+      <a class="button button-quiet" href="/docs">Read the docs</a>
+    </div>
+  </div>
+</section>
+
+<!-- --------------------------------------------------------- request access -->
 <section class="section" id="request-access">
   <div class="wrap narrow-wrap">
     <p class="micro">Request access</p>
-    <h2>Tell us what you are metering.</h2>
+    <h2>Tell us what you are billing for.</h2>
     <p class="prose">
-      Accounts are provisioned by hand while the service is young. That is a deliberate limit, not a
-      waiting list tactic: it means every account gets looked at by a person before it bills anyone.
-      Expect a reply from a human, not a drip campaign.
+      We set accounts up by hand at the moment. That is a real limit rather than a waiting list
+      tactic: it means a person looks at every account before it charges anyone a penny. You will
+      get a reply from that person.
     </p>
 
     {% match notice %}
@@ -195,9 +268,12 @@
         <input id="company" name="company" type="text" autocomplete="organization" maxlength="200">
       </div>
       <div class="field">
-        <label for="expected_events">Metered events per month, roughly <span class="optional">optional</span></label>
+        <label for="expected_events">Roughly how many billable events a month? <span class="optional">optional</span></label>
         <input id="expected_events" name="expected_events" type="number" inputmode="numeric" min="0" step="1" placeholder="50000">
-        <p class="hint">A terminal delivery is one event. It is usually far smaller than your request count, which is the whole point.</p>
+        <p class="hint">
+          A rough guess is fine. A billable event is one result your customer actually received,
+          so the number is normally much smaller than your request count.
+        </p>
       </div>
       <div class="field">
         <label for="note">What are you building? <span class="optional">optional</span></label>
@@ -205,8 +281,8 @@
       </div>
       <button class="button" type="submit">Request access</button>
       <p class="hint">
-        We store what you type here and email you about it. Nothing else, and no third party
-        analytics on this page.
+        We keep what you type here and email you about it. Nothing else happens to it, and there is
+        no tracking of any kind on this page.
       </p>
     </form>
   </div>

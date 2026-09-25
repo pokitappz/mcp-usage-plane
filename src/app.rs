@@ -144,6 +144,22 @@ fn against_limit(committed: u64, limit: Option<u64>, format: fn(i64) -> String) 
     }
 }
 
+/// Say why a customer is blocked, in words rather than in a variant name.
+///
+/// The JSON API reports the reason as the library names it, which is right for
+/// a machine and wrong for the person reading a dashboard: `QuotaExceeded` was
+/// appearing on the page as-is. The API contract is unchanged; only what is
+/// shown to a human is translated, and an unrecognised value falls through as
+/// itself rather than being swallowed.
+fn plain_reason(reason: Option<&str>) -> String {
+    match reason {
+        None => String::new(),
+        Some("QuotaExceeded") => "Over their usage limit".to_owned(),
+        Some("SpendCapExceeded") => "Over their spending limit".to_owned(),
+        Some(other) => other.to_owned(),
+    }
+}
+
 impl From<crate::usage::QuotaRow> for QuotaLine {
     fn from(row: crate::usage::QuotaRow) -> Self {
         Self {
@@ -151,7 +167,7 @@ impl From<crate::usage::QuotaRow> for QuotaLine {
             units: against_limit(row.committed_units, row.max_units, thousands),
             spend: against_limit(row.committed_spend_micros, row.max_spend_micros, money),
             admitting: row.admitting,
-            reason: row.reason.unwrap_or_default(),
+            reason: plain_reason(row.reason.as_deref()),
         }
     }
 }
@@ -210,6 +226,18 @@ struct DeadLetterLine {
     reason: String,
 }
 
+/// Say where a charge was headed, rather than which side of the system it was.
+///
+/// `downstream` and `upstream` are the names the export code uses for itself.
+/// They were reaching the page unchanged, where they tell a customer nothing.
+fn plain_direction(direction: &str) -> String {
+    match direction {
+        "downstream" => "To your payment provider".to_owned(),
+        "upstream" => "To UsageKit Cloud".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 impl From<crate::export::DeadLetterView> for DeadLetterLine {
     fn from(row: crate::export::DeadLetterView) -> Self {
         Self {
@@ -218,7 +246,7 @@ impl From<crate::export::DeadLetterView> for DeadLetterLine {
             meter: row.meter,
             units: thousands(row.units),
             when: minute(row.recorded_at),
-            direction: row.direction,
+            direction: plain_direction(&row.direction),
             reason: row.reason,
         }
     }
@@ -345,18 +373,16 @@ pub struct AppQuery {
 fn notice_for(query: &AppQuery) -> (Option<&'static str>, &'static str) {
     let message = match query.done.as_deref() {
         Some("revoked") => {
-            "That credential is revoked. Any sidecar still holding it will start failing within ten seconds."
+            "That key no longer works. Anything still using it will start failing within ten seconds."
         }
         Some("resolved") => {
-            "Marked reconciled. Nothing was resent: resolving records that a person dealt with it."
+            "Marked as handled and cleared from the list. Nothing was resent: this only records that somebody dealt with it."
         }
         Some("last-admin") => {
-            "That is the last live admin token. Mint a replacement before revoking it, or the account loses access to its own API."
+            "That is your last working admin key. Create a replacement before revoking it, or you will lock yourself out of your own API."
         }
-        Some("missing") => {
-            "That item no longer exists. It may already have been revoked or resolved."
-        }
-        Some("failed") => "That did not work. Nothing was changed.",
+        Some("missing") => "That is no longer there. It may already have been revoked or handled.",
+        Some("failed") => "That did not work, and nothing was changed.",
         _ => return (None, ""),
     };
     let kind = if matches!(query.done.as_deref(), Some("revoked" | "resolved")) {
@@ -418,7 +444,7 @@ async fn dashboard(
             &state,
             "/app",
             "Dashboard",
-            "Usage, quota, invoices and credentials for your UsageKit Cloud account.",
+            "Usage, limits, bills and API keys for your UsageKit Cloud account.",
         ),
         account_name: account_name.clone(),
         user_email: user.email.clone(),
@@ -464,9 +490,9 @@ async fn account_name(state: &AppState, account_id: &str) -> ApiResult<String> {
 /// Say what an account is charged, in the words the pricing page uses.
 fn describe_terms(pricing: &crate::pricing::Pricing) -> String {
     if pricing.per_event_micros == 0 && pricing.rate_bps == 0 && pricing.floor_micros == 0 {
-        return "No terms are set on this account, so nothing is being charged. \
-                Having no terms is not the same as being on free terms: the monthly \
-                close skips an account without them entirely."
+        return "No prices are set on this account, so nothing is being charged. That is not \
+                the same as being on a free plan: an account with no prices is skipped by the \
+                monthly billing run entirely."
             .to_owned();
     }
 
@@ -475,7 +501,7 @@ fn describe_terms(pricing: &crate::pricing::Pricing) -> String {
         // Quoted per ten thousand because that is how it is published, and a
         // price a customer cannot match to the pricing page invites a ticket.
         parts.push(format!(
-            "{} per 10,000 metered events",
+            "{} per 10,000 billable events",
             money(pricing.per_event_micros.saturating_mul(10_000))
         ));
     }
@@ -487,7 +513,7 @@ fn describe_terms(pricing: &crate::pricing::Pricing) -> String {
     }
     if pricing.rate_bps > 0 {
         parts.push(format!(
-            "plus {}% of metered revenue",
+            "plus {}% of what you bill your own customers",
             f64::from(pricing.rate_bps) / 100.0
         ));
     }
@@ -497,7 +523,7 @@ fn describe_terms(pricing: &crate::pricing::Pricing) -> String {
             money(pricing.floor_micros)
         ));
     }
-    format!("Your terms: {}.", parts.join(", "))
+    format!("You are charged {}.", parts.join(", "))
 }
 
 // ---------------------------------------------------------------- sign in
@@ -523,7 +549,7 @@ fn sign_in_shell(state: &AppState) -> Shell {
         state,
         "/signin",
         "Sign in",
-        "Sign in to your UsageKit Cloud account with an emailed code.",
+        "Sign in to your UsageKit Cloud account with a code we email you.",
     )
 }
 
@@ -576,8 +602,8 @@ async fn sign_in_start(
             &SignInTemplate {
                 shell: sign_in_shell(&state),
                 notice: Some(
-                    "That is more sign-in attempts than this form accepts right now. \
-                     Please try again in a minute.",
+                    "That is more sign-in attempts than we accept in one go. \
+                     Please wait a minute and try again.",
                 ),
                 notice_kind: "notice-bad",
             },
@@ -612,7 +638,7 @@ async fn sign_in_finish(
                 development_code: None,
                 notice: Some(
                     "That code is not right, or it has expired. \
-                     Request another and try again.",
+                     Ask for another and try again.",
                 ),
                 notice_kind: "notice-bad",
             },
@@ -672,12 +698,7 @@ fn secret_page(
 ) -> Response {
     render(
         &SecretTemplate {
-            shell: Shell::private(
-                state,
-                "/app",
-                "New credential",
-                "A newly minted credential.",
-            ),
+            shell: Shell::private(state, "/app", "New API key", "A newly created API key."),
             account_name,
             user_email: user.email.clone(),
             eyebrow,
@@ -708,9 +729,9 @@ async fn mint_token(
                 &state,
                 &user,
                 name,
-                "New API token",
-                "This token is now live. Put it in the environment of whatever will use it.",
-                format!("{} token, labelled {}", minted.scope, minted.label),
+                "Your new API key",
+                "This key works now. Put it in the settings of whatever is going to use it.",
+                format!("{} key, labelled {}", minted.scope, minted.label),
                 minted.token,
             ))
         }
@@ -755,9 +776,9 @@ async fn mint_key(
                 &state,
                 &user,
                 name,
-                "New tenant API key",
-                "Give this to the sidecar fronting that customer's traffic. It authenticates \
-                 their calls and nothing else.",
+                "New customer API key",
+                "Give this to the server handling that customer's traffic. It identifies their \
+                 calls and does nothing else.",
                 format!("API key for {tenant_key}"),
                 minted.api_key,
             ))
@@ -818,7 +839,7 @@ mod tests {
         };
         let described = describe_terms(&pricing);
         assert!(
-            described.contains("$0.50 per 10,000 metered events"),
+            described.contains("$0.50 per 10,000 billable events"),
             "{described}"
         );
         assert!(described.contains("first 50,000"), "{described}");
@@ -834,7 +855,7 @@ mod tests {
             starts_at: Utc::now(),
             ends_at: None,
         };
-        assert!(describe_terms(&pricing).contains("No terms are set"));
+        assert!(describe_terms(&pricing).contains("No prices are set"));
     }
 
     #[test]
@@ -853,6 +874,28 @@ mod tests {
             assert!(notice_for(&query(Some(attempt))).0.is_none(), "{attempt}");
         }
         assert!(notice_for(&query(None)).0.is_none());
+    }
+
+    #[test]
+    fn library_variant_names_do_not_reach_the_page() {
+        // `QuotaExceeded` was rendering on the dashboard exactly like that.
+        assert_eq!(
+            plain_reason(Some("QuotaExceeded")),
+            "Over their usage limit"
+        );
+        assert_eq!(
+            plain_reason(Some("SpendCapExceeded")),
+            "Over their spending limit"
+        );
+        assert_eq!(plain_direction("downstream"), "To your payment provider");
+        assert_eq!(plain_direction("upstream"), "To UsageKit Cloud");
+
+        // A value this does not recognise is shown as it is rather than
+        // swallowed: a blank cell where a reason should be is worse than an
+        // ugly one, because it looks like there was no reason.
+        assert_eq!(plain_reason(None), "");
+        assert_eq!(plain_reason(Some("SomethingNew")), "SomethingNew");
+        assert_eq!(plain_direction("sideways"), "sideways");
     }
 
     #[test]

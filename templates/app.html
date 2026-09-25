@@ -14,19 +14,19 @@
 
     <div class="stats">
       <div class="stat">
-        <p class="stat-label">Metered events, 30 days</p>
+        <p class="stat-label">Billable events, last 30 days</p>
         <p class="stat-figure">{{ summary.units_30d }}</p>
       </div>
       <div class="stat">
-        <p class="stat-label">Billing customers</p>
+        <p class="stat-label">Your customers</p>
         <p class="stat-figure">{{ summary.tenants }}</p>
       </div>
       <div class="stat">
-        <p class="stat-label">Awaiting export</p>
+        <p class="stat-label">Waiting to be billed</p>
         <p class="stat-figure">{{ summary.pending }}</p>
       </div>
       <div class="stat {% if summary.dead_lettered > 0 %}stat-alarm{% endif %}">
-        <p class="stat-label">Needs reconciling</p>
+        <p class="stat-label">Could not be billed</p>
         <p class="stat-figure">{{ summary.dead_lettered }}</p>
       </div>
     </div>
@@ -36,15 +36,15 @@
 {% if summary.dead_lettered > 0 %}
 <section class="section section-alarm">
   <div class="wide-wrap">
-    <h2>{{ summary.dead_lettered }} aggregates were metered and never delivered.</h2>
+    <h2>{{ summary.dead_lettered }} pieces of usage could not be billed.</h2>
     <p class="prose">
-      This is usage your provider has not been told about, which means it is revenue nobody is
-      being charged for. Each one was rejected permanently rather than transiently, so it needs a
-      person rather than another retry.
+      Your customers used this and your payment provider was never told, so nobody is being charged
+      for it. These were refused outright rather than being a temporary failure, so retrying will
+      not help and a person needs to look at them.
     </p>
     <p class="prose">
-      Resolving marks it reconciled here. It does not resend anything, and nothing on this page
-      pretends otherwise.
+      Marking one as handled only clears it from this list. It does not resend anything, and
+      nothing on this page pretends otherwise.
     </p>
   </div>
 </section>
@@ -55,8 +55,8 @@
   <div class="wide-wrap">
     <h2>Usage</h2>
     <p class="prose">
-      Terminal deliveries by day, customer and meter, for the last 30 days. These are the same
-      figures <code>GET /v1/usage</code> returns, from the same query.
+      What your customers received, by day, over the last 30 days. These are the same figures the
+      API returns, because they come from the same query.
     </p>
 
     {% if usage.is_empty() %}
@@ -64,14 +64,14 @@
     {% else %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Metered usage by day, customer and meter</caption>
+        <caption class="visually-hidden">Billable events by day, customer and label</caption>
         <thead>
           <tr>
             <th scope="col">Day</th>
             <th scope="col">Customer</th>
-            <th scope="col">Meter</th>
-            <th scope="col" class="numeric">Units</th>
-            <th scope="col" class="numeric">Aggregates</th>
+            <th scope="col">Label</th>
+            <th scope="col" class="numeric">Billable events</th>
+            <th scope="col" class="numeric">Reports received</th>
           </tr>
         </thead>
         <tbody>
@@ -91,14 +91,14 @@
   </div>
 </section>
 
-<!-- ------------------------------------------------------------- quota -->
+<!-- ------------------------------------------------------------ limits -->
 <section class="section section-alt" id="quota">
   <div class="wide-wrap">
-    <h2>Quota and spend caps</h2>
+    <h2>Usage and spending limits</h2>
     <p class="prose">
-      Where each customer stands this month. <strong>Admitting</strong> answers whether the next
-      unit would be allowed, which is the same question, asked of the same function, that the
-      sidecar answers when it admits or refuses a call.
+      Where each customer stands this month. The last column says whether their next call would go
+      through, worked out by the same code your own server uses when it decides to allow or block
+      one.
     </p>
 
     {% if quota.is_empty() %}
@@ -106,13 +106,13 @@
     {% else %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Quota status per billing customer</caption>
+        <caption class="visually-hidden">Usage and spending against limits, per customer</caption>
         <thead>
           <tr>
             <th scope="col">Customer</th>
             <th scope="col" class="numeric">Units this month</th>
             <th scope="col" class="numeric">Spend this month</th>
-            <th scope="col">Next unit</th>
+            <th scope="col">Next call</th>
           </tr>
         </thead>
         <tbody>
@@ -123,9 +123,9 @@
             <td class="numeric">{{ row.spend }}</td>
             <td>
               {% if row.admitting %}
-              <span class="pill pill-ok">Admitting</span>
+              <span class="pill pill-ok">Allowed</span>
               {% else %}
-              <span class="pill pill-bad">Refusing</span>
+              <span class="pill pill-bad">Blocked</span>
               <span class="pill-note">{{ row.reason }}</span>
               {% endif %}
             </td>
@@ -146,17 +146,17 @@
 
     {% if invoices.is_empty() %}
     <p class="empty">
-      No period has closed yet. A period is charged once, after it ends, and each invoice records
-      the terms it applied rather than pointing at your current ones.
+      No month has been billed yet. A month is charged once, after it ends, and each bill records
+      the prices that applied at the time rather than pointing at your current ones.
     </p>
     {% else %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Closed periods and what each was charged</caption>
+        <caption class="visually-hidden">Months billed and what each was charged</caption>
         <thead>
           <tr>
-            <th scope="col">Period</th>
-            <th scope="col" class="numeric">Metered units</th>
+            <th scope="col">Month</th>
+            <th scope="col" class="numeric">Billable events</th>
             <th scope="col" class="numeric">Your revenue</th>
             <th scope="col" class="numeric">Charged</th>
             <th scope="col">Status</th>
@@ -171,9 +171,9 @@
             <td class="numeric">{{ row.charge }}</td>
             <td>
               {% if row.settled %}
-              <span class="pill pill-ok">Settled</span>
+              <span class="pill pill-ok">Sent</span>
               {% else %}
-              <span class="pill pill-wait">Awaiting submission</span>
+              <span class="pill pill-wait">Not sent yet</span>
               {% endif %}
             </td>
           </tr>
@@ -190,26 +190,25 @@
   <div class="wide-wrap">
     <h2>Your customers</h2>
     <p class="prose">
-      A tenant is one of your billing customers, its price book, and the keys its sidecars
-      authenticate with. Price books are edited through <code>PATCH /v1/tenants</code> with an
-      admin token, because a price book is structured JSON and a form that flattened it would lose
-      the per-name prices.
+      Each customer has their own prices, their own limits, and their own API keys. Prices are
+      edited through the API rather than here, because a price list can set a different rate for
+      every tool you offer and a form would flatten that into something less useful.
     </p>
 
     {% if tenants.is_empty() %}
-    <p class="empty">No tenants yet. Create one with <code>POST /v1/tenants</code>.</p>
+    <p class="empty">No customers yet. Add one with <code>POST /v1/tenants</code>.</p>
     {% else %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Tenants and their terms</caption>
+        <caption class="visually-hidden">Your customers and their terms</caption>
         <thead>
           <tr>
-            <th scope="col">Tenant</th>
-            <th scope="col">Billing customer</th>
-            <th scope="col" class="numeric">Unit price</th>
-            <th scope="col" class="numeric">Unit cap</th>
-            <th scope="col" class="numeric">Spend cap</th>
-            <th scope="col" class="numeric">Live keys</th>
+            <th scope="col">Customer</th>
+            <th scope="col">Billed as</th>
+            <th scope="col" class="numeric">Price each</th>
+            <th scope="col" class="numeric">Usage limit</th>
+            <th scope="col" class="numeric">Spending limit</th>
+            <th scope="col" class="numeric">Active keys</th>
             <th scope="col">New key</th>
           </tr>
         </thead>
@@ -246,10 +245,10 @@
 <!-- ------------------------------------------------------------ export -->
 <section class="section" id="export">
   <div class="wide-wrap">
-    <h2>Export</h2>
+    <h2>Where the money goes</h2>
     <p class="prose">
-      Where metered usage is forwarded. The credential is sealed at rest and never readable back,
-      which is why this shows only whether one is stored. Configure it with
+      The payment provider we send charges to. Your key is encrypted and cannot be read back out,
+      which is why this only says whether one is stored. Set it with
       <code>PUT /v1/export/destination</code>.
     </p>
 
@@ -260,31 +259,31 @@
         <p>{{ destination_secret }}</p>
       </article>
       <article class="card">
-        <h3>Awaiting export</h3>
+        <h3>Waiting to be billed</h3>
         <p class="card-figure">{{ summary.pending }}</p>
-        <p>Aggregates recorded here and not yet forwarded. A backlog that keeps growing means the
-          destination is refusing or unreachable.</p>
+        <p>Recorded here and not yet sent on. A number that keeps climbing means your payment
+          provider is refusing us or is unreachable.</p>
       </article>
       <article class="card {% if summary.dead_lettered > 0 %}card-alarm{% endif %}">
-        <h3>Needs reconciling</h3>
+        <h3>Could not be billed</h3>
         <p class="card-figure">{{ summary.dead_lettered }}</p>
-        <p>Permanently rejected. Retrying will not fix these, so they wait for a person.</p>
+        <p>Refused outright. Retrying will not fix these, so they wait for a person.</p>
       </article>
     </div>
 
     {% if !dead_letters.is_empty() %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Aggregates awaiting reconciliation</caption>
+        <caption class="visually-hidden">Usage that could not be billed</caption>
         <thead>
           <tr>
             <th scope="col">Recorded</th>
             <th scope="col">Customer</th>
-            <th scope="col">Meter</th>
-            <th scope="col" class="numeric">Units</th>
+            <th scope="col">Label</th>
+            <th scope="col" class="numeric">Billable events</th>
             <th scope="col">Direction</th>
             <th scope="col">Why</th>
-            <th scope="col">Resolve</th>
+            <th scope="col"><span class="visually-hidden">Action</span></th>
           </tr>
         </thead>
         <tbody>
@@ -298,7 +297,7 @@
             <td>{{ row.reason }}</td>
             <td>
               <form method="post" action="/app/dead-letters/{{ row.identifier|urlencode_strict }}/resolve" class="inline-form">
-                <button class="link-button" type="submit">Mark resolved</button>
+                <button class="link-button" type="submit">Mark handled</button>
               </form>
             </td>
           </tr>
@@ -315,37 +314,37 @@
   <div class="wide-wrap">
     <h2>API credentials</h2>
     <p class="prose">
-      An <strong>edge</strong> token goes to your sidecars and cannot reach pricing. An
-      <strong>admin</strong> token manages tenants, prices and export configuration, and does not
-      belong in a sidecar's environment. Both are shown once, at creation.
+      An <strong>edge</strong> key goes to your own servers and cannot read or change pricing. An
+      <strong>admin</strong> key manages customers, prices and payment settings, and should never
+      be put on a server that faces the internet. Both are shown once, when you create them.
     </p>
 
     <form class="form form-inline" method="post" action="/app/tokens">
       <div class="field">
         <label for="scope">Scope</label>
         <select id="scope" name="scope">
-          <option value="edge">edge, for a sidecar</option>
-          <option value="admin">admin, for your own tooling</option>
+          <option value="edge">edge, for your servers</option>
+          <option value="admin">admin, for your own tools and scripts</option>
         </select>
       </div>
       <div class="field">
         <label for="label">Label</label>
-        <input id="label" name="label" type="text" maxlength="200" placeholder="staging sidecar">
+        <input id="label" name="label" type="text" maxlength="200" placeholder="staging server">
       </div>
-      <button class="button" type="submit">Mint a token</button>
+      <button class="button" type="submit">Create a key</button>
     </form>
 
     {% if tokens.is_empty() %}
-    <p class="empty">No tokens on this account.</p>
+    <p class="empty">No keys on this account yet.</p>
     {% else %}
     <div class="panel panel-flush">
       <table class="figures">
-        <caption class="visually-hidden">Account credentials</caption>
+        <caption class="visually-hidden">API keys on this account</caption>
         <thead>
           <tr>
             <th scope="col">Label</th>
             <th scope="col">Scope</th>
-            <th scope="col">Digest</th>
+            <th scope="col">Fingerprint</th>
             <th scope="col">Created</th>
             <th scope="col">Status</th>
           </tr>

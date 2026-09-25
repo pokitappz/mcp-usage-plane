@@ -430,6 +430,47 @@ code {
 .footer-name { font-weight: 680; margin: 0 0 0.4rem; letter-spacing: -0.02em; }
 .footer-note { font-size: 0.875rem; color: var(--faint); margin: 0; max-width: 26rem; }
 
+/* A price in the hero, because a business reader wants the number before they
+ * want the argument. Sits between the pitch and the buttons rather than being
+ * a card, so it reads as a fact rather than an offer. */
+.price-strip {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  margin: 1.75rem 0 0;
+  padding: 0.8rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-small);
+  font-size: 0.95rem;
+  color: var(--muted);
+  max-width: 44rem;
+}
+.price-strip strong { color: var(--ink); font-weight: 680; }
+
+/* The one sentence that turns the table above it into money. Given its own
+ * weight because it is the line a non-technical reader is there for. */
+.panel-highlight {
+  margin: 1.25rem 0 0;
+  padding: 0.9rem 1.1rem;
+  background: var(--accent-soft);
+  border-radius: var(--radius-small);
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.panel-highlight strong { font-weight: 680; }
+
+/* The precise term, kept for the reader who wants it, quiet enough that the
+ * reader who does not can skip the sentence. */
+.aside {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--faint);
+}
+
 /* ------------------------------------------------------------ dashboard */
 
 .wide-wrap { width: min(84rem, 100% - 3rem); margin-inline: auto; }
