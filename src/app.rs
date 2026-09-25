@@ -233,7 +233,7 @@ struct DeadLetterLine {
 fn plain_direction(direction: &str) -> String {
     match direction {
         "downstream" => "To your payment provider".to_owned(),
-        "upstream" => "To UsageKit Cloud".to_owned(),
+        "upstream" => "To this service".to_owned(),
         other => other.to_owned(),
     }
 }
@@ -444,7 +444,7 @@ async fn dashboard(
             &state,
             "/app",
             "Dashboard",
-            "Usage, limits, bills and API keys for your UsageKit Cloud account.",
+            "Usage, limits, bills and API keys for your account.",
         ),
         account_name: account_name.clone(),
         user_email: user.email.clone(),
@@ -549,7 +549,7 @@ fn sign_in_shell(state: &AppState) -> Shell {
         state,
         "/signin",
         "Sign in",
-        "Sign in to your UsageKit Cloud account with a code we email you.",
+        "Sign in with a code we email you.",
     )
 }
 
@@ -888,7 +888,7 @@ mod tests {
             "Over their spending limit"
         );
         assert_eq!(plain_direction("downstream"), "To your payment provider");
-        assert_eq!(plain_direction("upstream"), "To UsageKit Cloud");
+        assert_eq!(plain_direction("upstream"), "To this service");
 
         // A value this does not recognise is shown as it is rather than
         // swallowed: a blank cell where a reason should be is worse than an

@@ -201,9 +201,28 @@ impl Plane {
             // cookie is only `Secure` when it is https. Without it every
             // state-changing human route refuses, which is the right default
             // but makes the sign-in suite untestable.
-            .env("APP_PUBLIC_URL", format!("http://127.0.0.1:{port}"));
+            .env("APP_PUBLIC_URL", format!("http://127.0.0.1:{port}"))
+            // The marketing site is off by default, because this service is
+            // distributed for other people to run and the pages are ours. Our
+            // own deployment turns it on, and so does the suite that tests it.
+            .env("PLANE_PUBLIC_SITE", "1")
+            // The suite asserts on our own copy, so it runs as our deployment.
+            .env("PLANE_PRODUCT_NAME", "UsageKit")
+            .env("PLANE_PRODUCT_SUFFIX", "Cloud")
+            // No mail service is configured in tests, so the client is absent
+            // and codes come back in the response. This is here for the cases
+            // that do configure one.
+            .env("EMAIL_FROM_ADDRESS", "billing@example.test");
+        // An empty value means unset, not empty. Without this a test can only
+        // exercise the values a variable takes, never its absence, and "what
+        // happens when nobody configures this" is exactly the case that matters
+        // for a service other people deploy.
         for (name, value) in extra {
-            command.env(name, value);
+            if value.is_empty() {
+                command.env_remove(name);
+            } else {
+                command.env(name, value);
+            }
         }
 
         let mut child = command.spawn().expect("spawn the control plane binary");

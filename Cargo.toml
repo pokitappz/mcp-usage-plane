@@ -4,16 +4,23 @@ members = ["sqlx-postgres-only"]
 
 [package]
 name = "mcp-usage-plane"
-description = "Hosted usage and entitlement control plane for MCP servers."
+description = "Usage and entitlement control plane for MCP servers."
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+# Source-available under the Functional Source License: run it for your own
+# billing, do not offer it as a competing service, and it becomes Apache-2.0 two
+# years after each version ships.
+license-file = "LICENSE.md"
+# Still false. Source-available means the repository and the container image,
+# not crates.io: this is a service, and `cargo install` is not how anyone would
+# deploy one.
 publish = false
 
-# The paid product. It depends on the Apache-2.0 crates from crates.io rather
-# than by path, which keeps the open-core boundary honest: if the published
-# crates are not enough to build a control plane, customers self-hosting the
-# free sidecar would hit the same wall.
+# The paid product, though now a readable one. It depends on the Apache-2.0
+# crates from crates.io rather than by path, which keeps the open-core boundary
+# honest: if the published crates are not enough to build a control plane,
+# anyone metering with the free proxy would hit the same wall.
 [dependencies]
 mcp-usage-core = "0.4.0"
 mcp-usage-export = "0.4.0"

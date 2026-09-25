@@ -16,7 +16,7 @@
 <header class="masthead">
   <div class="wide-wrap masthead-inner">
     <a class="wordmark" href="/">
-      <span class="wordmark-name">UsageKit</span><span class="wordmark-suffix">Cloud</span>
+      <span class="wordmark-name">{{ shell.product.name }}</span>{% if !shell.product.suffix.is_empty() %}<span class="wordmark-suffix">{{ shell.product.suffix }}</span>{% endif %}
     </a>
     <div class="account-bar">
       <span class="account-name">{{ account_name }}</span>

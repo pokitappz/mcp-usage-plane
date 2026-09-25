@@ -53,6 +53,13 @@ pub struct AppState {
     pub health: std::sync::Arc<throttle::HealthProbe>,
     /// Public origin, for cookie security and the CSRF origin check.
     pub public_url: Option<String>,
+    /// What this deployment calls itself, in page titles and the wordmark.
+    ///
+    /// Configurable because somebody else runs this. Their dashboard showing
+    /// our wordmark to their customers is the same bug as our branding on
+    /// their outgoing mail, and it is the one a test caught only by booting
+    /// the binary with nothing configured.
+    pub product: Branding,
     /// Transactional email, when configured.
     pub email: Option<std::sync::Arc<email::EmailClient>>,
     /// Per-token authentication cache and rate limiter.
@@ -131,6 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(?plane_billing, "plane billing configuration");
 
     let public_url = public_url_from_env()?;
+    let product = Branding::from_env();
     let mail = email::EmailClient::from_env()?.map(std::sync::Arc::new);
     if mail.is_none() {
         tracing::warn!("email is not configured; sign-in codes cannot be delivered");
@@ -142,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         allow_loopback_destinations,
         billing: plane_billing,
         public_url,
+        product,
         email: mail,
         health: std::sync::Arc::new(throttle::HealthProbe::default()),
         admission: std::sync::Arc::new(throttle::Admission::default()),
@@ -187,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// load bearing: body limit inside the timeout, timeout inside the trace, and
 /// the response policy outermost so nothing can serve a page without it.
 fn build_router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/healthz", routing::get(healthz))
         .merge(tenants::router())
         .merge(usage::router())
@@ -199,7 +208,6 @@ fn build_router(state: AppState) -> Router {
         .merge(people::router())
         .merge(accounts::router())
         .merge(access::router())
-        .merge(pages::router())
         .merge(app::router())
         // `ServeDir` resolves against the process working directory rather than
         // the crate root, which is why the Dockerfile copies `static/` next to
@@ -208,8 +216,28 @@ fn build_router(state: AppState) -> Router {
         .nest_service(
             "/assets",
             tower_http::services::ServeDir::new(assets_dir()).precompressed_gzip(),
-        )
-        .fallback(pages::not_found)
+        );
+
+    // The marketing site is ours, and this service is source-available, so it
+    // is off unless a deployment asks for it. That direction is the whole
+    // point: an operator who never reads this variable serves no marketing at
+    // all, rather than serving ours from their domain. Our own deployment sets
+    // it. See `public_site_enabled`.
+    let router = if public_site_enabled() {
+        router.merge(pages::router()).fallback(pages::not_found)
+    } else {
+        // Without the site there is no shell to render a 404 into, and the
+        // marketing 404 links to pages that would not exist. A plain answer is
+        // the honest one.
+        router
+            .route(
+                "/",
+                routing::get(|| async { axum::response::Redirect::to("/signin") }),
+            )
+            .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "Not found") })
+    };
+
+    router
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         // Outermost, so it also bounds a client that is slow to send its body.
         // Without it a trickling request holds a pool connection for as long as
@@ -248,6 +276,58 @@ fn public_url_from_env() -> Result<Option<String>, Box<dyn std::error::Error>> {
         ),
     }
     Ok(public_url)
+}
+
+/// What a deployment calls itself.
+///
+/// Two parts so the wordmark can stay two-tone where that is wanted, and read
+/// as one plain name where it is not. Defaults to neither of ours: an operator
+/// who never sets these ships something generic rather than something that
+/// misattributes itself to us.
+#[derive(Clone, Debug)]
+pub struct Branding {
+    /// The name itself.
+    pub name: String,
+    /// A second word set apart in the wordmark, empty when there is none.
+    pub suffix: String,
+}
+
+impl Branding {
+    /// Read the name from the environment.
+    fn from_env() -> Self {
+        let name = std::env::var("PLANE_PRODUCT_NAME")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Usage control plane".to_owned());
+        let suffix = std::env::var("PLANE_PRODUCT_SUFFIX")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .unwrap_or_default();
+        Self { name, suffix }
+    }
+
+    /// The full name, for titles and prose.
+    #[must_use]
+    pub fn full(&self) -> String {
+        if self.suffix.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} {}", self.name, self.suffix)
+        }
+    }
+}
+
+/// Whether this deployment serves the public marketing site.
+///
+/// Off by default. This service is distributed under a licence that lets other
+/// people run it, and the pages under `pages::router` advertise our pricing and
+/// make claims about how *we* operate, most of which are untrue of somebody
+/// else's deployment. A self-hoster gets the API, the dashboard and sign-in;
+/// the shop front stays ours.
+fn public_site_enabled() -> bool {
+    std::env::var("PLANE_PUBLIC_SITE")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 /// Where the stylesheet and the icon are served from.

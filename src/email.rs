@@ -16,25 +16,16 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-/// The production endpoint, on the internal network.
-const PRODUCTION_ENDPOINT: &str = "http://pokit-apps-email.flycast/send";
 /// Shortest token that could plausibly be real.
 const MIN_TOKEN_LEN: usize = 24;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-const FROM_EMAIL: &str = "support@pokitapps.com";
-const FROM_NAME: &str = "UsageKit";
-const SIGN_IN_SUBJECT: &str = "Your UsageKit sign-in code";
-
-/// Where an access request is announced.
+/// Who the mail says it is from, when nobody has said.
 ///
-/// The operator, not the person who asked: access is granted by hand, so this
-/// is the only thing that moves a queued row in front of somebody. The visitor
-/// gets their confirmation from the page, which is already rendered by the time
-/// this is attempted.
-const OPERATOR_EMAIL: &str = "support@pokitapps.com";
-const ACCESS_SUBJECT: &str = "UsageKit Cloud access request";
-const GRANTED_SUBJECT: &str = "Your UsageKit Cloud account is ready";
+/// There is no sensible default address, so this is refused at startup rather
+/// than guessed: mail claiming to come from an address the operator does not
+/// own is how a deployment ends up on a blocklist.
+const FROM_EMAIL_VAR: &str = "EMAIL_FROM_ADDRESS";
 
 /// Why a message could not be sent. Never carries message content.
 #[derive(Debug, thiserror::Error)]
@@ -73,6 +64,17 @@ pub struct EmailClient {
     http: reqwest::Client,
     endpoint: String,
     token: String,
+    /// The address mail claims to come from.
+    from_email: String,
+    /// The name beside it, and the name used in subjects and bodies.
+    product_name: String,
+    /// Where an access request is announced.
+    ///
+    /// The operator, not the person who asked: access is granted by hand, so
+    /// this is the only thing that moves a queued row in front of somebody. The
+    /// visitor gets their confirmation from the page, which is already rendered
+    /// by the time this is attempted.
+    operator_email: String,
 }
 
 impl std::fmt::Debug for EmailClient {
@@ -82,6 +84,9 @@ impl std::fmt::Debug for EmailClient {
             .field("http", &"<client>")
             .field("endpoint", &self.endpoint)
             .field("token", &"<redacted>")
+            .field("from_email", &self.from_email)
+            .field("product_name", &self.product_name)
+            .field("operator_email", &self.operator_email)
             .finish()
     }
 }
@@ -121,11 +126,49 @@ impl EmailClient {
                 "EMAIL_SERVICE_TOKEN must be at least {MIN_TOKEN_LEN} characters"
             ));
         }
-        if !endpoint_is_allowed(&url) {
-            return Err(format!(
-                "EMAIL_SERVICE_URL must be {PRODUCTION_ENDPOINT} or a loopback /send endpoint"
-            ));
+        // Any https host, because whoever deploys this chooses their own mail
+        // service. What the check still refuses is plaintext to somewhere other
+        // than loopback, which is the part that actually protects the token:
+        // the original allowlist existed to stop a bearer token crossing the
+        // open network in clear, not to stop it reaching an unfamiliar name.
+        //
+        // The opt-in exists for a mail relay on a private network, which is how
+        // this service runs in production and is not reachable over https.
+        let allow_plaintext = std::env::var("EMAIL_ALLOW_PLAINTEXT")
+            .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"));
+        if !endpoint_is_allowed(&url, allow_plaintext) {
+            return Err(
+                "EMAIL_SERVICE_URL must be an https URL, or plaintext on loopback. \
+                 For a mail relay on a private network, set EMAIL_ALLOW_PLAINTEXT=1 \
+                 and understand that the service token then crosses that network \
+                 in the clear"
+                    .to_owned(),
+            );
         }
+        if allow_plaintext && !url.starts_with("https://") {
+            tracing::warn!(
+                "EMAIL_ALLOW_PLAINTEXT is set; the email service token is sent unencrypted"
+            );
+        }
+
+        let from_email = std::env::var(FROM_EMAIL_VAR)
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!("{FROM_EMAIL_VAR} must be set to an address this deployment may send from")
+            })?;
+        // The same name the pages use. One variable for what a deployment
+        // calls itself, rather than a page saying one thing and its mail
+        // another.
+        let product_name = crate::Branding::from_env().full();
+        // Access requests go to whoever runs this. Falling back to the sending
+        // address means a deployment that never sets it still reaches a human.
+        let operator_email = std::env::var("EMAIL_OPERATOR_ADDRESS")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| from_email.clone());
 
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -139,6 +182,9 @@ impl EmailClient {
             http,
             endpoint: url,
             token,
+            from_email,
+            product_name,
+            operator_email,
         }))
     }
 
@@ -148,20 +194,23 @@ impl EmailClient {
     ///
     /// Returns an [`EmailError`] category. The code never appears in one.
     pub async fn send_sign_in_code(&self, to: &str, code: &str) -> Result<(), EmailError> {
+        let product = &self.product_name;
+        let subject = format!("Your {product} sign-in code");
         let message = Message {
-            from_name: FROM_NAME,
-            from_email: FROM_EMAIL,
+            from_name: product,
+            from_email: &self.from_email,
             to: vec![Recipient { email: to }],
-            subject: SIGN_IN_SUBJECT,
+            subject: &subject,
             text_content: format!(
-                "Your UsageKit sign-in code is {code}\n\n\
+                "Your {product} sign-in code is {code}\n\n\
                  It expires in 10 minutes and can be used once.\n\n\
                  If you did not ask to sign in, you can ignore this message."
             ),
             html_content: format!(
-                "<p>Your UsageKit sign-in code is <strong>{}</strong></p>\
+                "<p>Your {} sign-in code is <strong>{}</strong></p>\
                  <p>It expires in 10 minutes and can be used once.</p>\
                  <p>If you did not ask to sign in, you can ignore this message.</p>",
+                escape_html(product),
                 escape_html(code)
             ),
         };
@@ -188,18 +237,19 @@ impl EmailClient {
             expected_events.map_or_else(|| "not given".to_owned(), |value| value.to_string());
         let note = note.unwrap_or("none");
 
+        let subject = format!("{} access request", self.product_name);
         let message = Message {
-            from_name: FROM_NAME,
-            from_email: FROM_EMAIL,
+            from_name: &self.product_name,
+            from_email: &self.from_email,
             to: vec![Recipient {
-                email: OPERATOR_EMAIL,
+                email: &self.operator_email,
             }],
-            subject: ACCESS_SUBJECT,
+            subject: &subject,
             text_content: format!(
                 "Access request\n\n\
                  Email: {from_address}\n\
                  Company: {company}\n\
-                 Expected metered events per month: {expected}\n\n\
+                 Billable events per month: {expected}\n\n\
                  Note:\n{note}\n"
             ),
             // Every interpolated value here was typed by an anonymous visitor,
@@ -208,7 +258,7 @@ impl EmailClient {
             // will show.
             html_content: format!(
                 "<p><strong>Access request</strong></p>\
-                 <p>Email: {}<br>Company: {}<br>Expected metered events per month: {}</p>\
+                 <p>Email: {}<br>Company: {}<br>Billable events per month: {}</p>\
                  <p>Note:<br>{}</p>",
                 escape_html(from_address),
                 escape_html(company),
@@ -231,24 +281,27 @@ impl EmailClient {
     /// Returns an [`EmailError`] category. The caller treats a failure as
     /// non-fatal and reports it, because the account exists either way.
     pub async fn send_access_granted(&self, to: &str, sign_in_url: &str) -> Result<(), EmailError> {
+        let product = &self.product_name;
+        let subject = format!("Your {product} account is ready");
         let message = Message {
-            from_name: FROM_NAME,
-            from_email: FROM_EMAIL,
+            from_name: product,
+            from_email: &self.from_email,
             to: vec![Recipient { email: to }],
-            subject: GRANTED_SUBJECT,
+            subject: &subject,
             text_content: format!(
-                "Your UsageKit Cloud account is ready.\n\n\
+                "Your {product} account is ready.\n\n\
                  Sign in at {sign_in_url} with this address. There is no password: \
                  we email you a six digit code each time.\n\n\
-                 Your first step is minting an edge token from the dashboard and \
-                 pointing a sidecar at it.\n"
+                 Your first step is creating an edge key from the dashboard and \
+                 pointing your server at it.\n"
             ),
             html_content: format!(
-                "<p>Your UsageKit Cloud account is ready.</p>\
+                "<p>Your {product} account is ready.</p>\
                  <p>Sign in at <a href=\"{url}\">{url}</a> with this address. \
                  There is no password: we email you a six digit code each time.</p>\
-                 <p>Your first step is minting an edge token from the dashboard and \
-                 pointing a sidecar at it.</p>",
+                 <p>Your first step is creating an edge key from the dashboard and \
+                 pointing your server at it.</p>",
+                product = escape_html(product),
                 url = escape_html(sign_in_url)
             ),
         };
@@ -300,23 +353,28 @@ impl EmailClient {
 ///
 /// The production URL exactly, or a loopback address for tests. Anything else
 /// would send a bearer token to a host nobody reviewed.
-fn endpoint_is_allowed(url: &str) -> bool {
-    if url == PRODUCTION_ENDPOINT {
-        return true;
-    }
+fn endpoint_is_allowed(url: &str, allow_plaintext: bool) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
     };
-    if parsed.path() != "/send" {
-        return false;
-    }
-    match parsed.host() {
-        Some(url::Host::Ipv4(address)) => address.is_loopback(),
-        Some(url::Host::Ipv6(address)) => address.is_loopback(),
-        // `Url::host_str` returns a bracketed IPv6 literal, which is why this
-        // matches on `host()` instead.
-        Some(url::Host::Domain(name)) => name == "localhost",
-        None => false,
+    match parsed.scheme() {
+        // Any host. The operator picked their mail service and the token is
+        // encrypted in transit, which is what mattered.
+        "https" => parsed.host().is_some(),
+        "http" => {
+            if allow_plaintext {
+                return parsed.host().is_some();
+            }
+            match parsed.host() {
+                Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                // `Url::host_str` returns a bracketed IPv6 literal, which is
+                // why this matches on `host()` instead.
+                Some(url::Host::Domain(name)) => name == "localhost",
+                None => false,
+            }
+        }
+        _ => false,
     }
 }
 
@@ -332,32 +390,101 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_production_endpoint_or_loopback_is_dialled() {
-        assert!(endpoint_is_allowed(PRODUCTION_ENDPOINT));
-        assert!(endpoint_is_allowed("http://127.0.0.1:9000/send"));
-        assert!(endpoint_is_allowed("http://localhost:9000/send"));
-        assert!(endpoint_is_allowed("http://[::1]:9000/send"));
-
-        for attempt in [
-            "http://evil.example/send",
-            "https://pokit-apps-email.flycast.evil.example/send",
-            "http://127.0.0.1:9000/collect",
-            "http://8.8.8.8/send",
-            "not a url",
+    fn any_https_mail_service_is_dialled_but_plaintext_is_not() {
+        // Whoever deploys this picks their own mail service, so the host is no
+        // longer ours to enumerate. What the check still protects is the token
+        // in transit, which is what the original allowlist was actually for.
+        for allowed in [
+            "https://api.postmarkapp.com/email",
+            "https://mail.example.com/v3/messages",
+            "https://api.example.co.uk/send",
         ] {
-            assert!(!endpoint_is_allowed(attempt), "{attempt} was allowed");
+            assert!(endpoint_is_allowed(allowed, false), "{allowed} was refused");
         }
+
+        // Loopback stays reachable in the clear, for the test suite and for a
+        // relay running beside the service.
+        for loopback in [
+            "http://127.0.0.1:9000/send",
+            "http://localhost:9000/send",
+            "http://[::1]:9000/send",
+            "http://localhost:9000/anything",
+        ] {
+            assert!(
+                endpoint_is_allowed(loopback, false),
+                "{loopback} was refused"
+            );
+        }
+
+        for refused in [
+            "http://mail.example.com/send",
+            "http://8.8.8.8/send",
+            "ftp://mail.example.com/send",
+            "file:///etc/passwd",
+            "not a url",
+            "https://",
+        ] {
+            assert!(
+                !endpoint_is_allowed(refused, false),
+                "{refused} was allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn plaintext_off_loopback_requires_saying_so_explicitly() {
+        // A mail relay on a private network cannot offer https, and this
+        // service runs against one. The opt-in exists so that arrangement is a
+        // decision somebody made rather than a hole in the check.
+        let private = "http://mail-relay.internal/send";
+        assert!(!endpoint_is_allowed(private, false));
+        assert!(endpoint_is_allowed(private, true));
+
+        // Even opted in, a URL that is not a URL is still refused.
+        assert!(!endpoint_is_allowed("not a url", true));
+        assert!(!endpoint_is_allowed("ftp://mail.example.com/send", true));
     }
 
     #[test]
     fn debug_output_never_carries_the_token() {
         let client = EmailClient {
             http: reqwest::Client::new(),
-            endpoint: PRODUCTION_ENDPOINT.to_owned(),
+            endpoint: "https://mail.example.com/send".to_owned(),
             token: "a_real_looking_service_token_value".to_owned(),
+            from_email: "billing@example.com".to_owned(),
+            product_name: "Example Billing".to_owned(),
+            operator_email: "ops@example.com".to_owned(),
         };
         let rendered = format!("{client:?}");
         assert!(!rendered.contains("a_real_looking_service_token_value"));
+    }
+
+    #[test]
+    fn nothing_here_names_the_company_that_wrote_it() {
+        // This service is source-available, so somebody else runs it. Their
+        // customers receiving mail branded with our product name, from our
+        // support address, would be a bug in the obvious direction. There is no
+        // default address at all: sending as an address the operator does not
+        // own is how a deployment reaches a blocklist.
+        // The name comes from `Branding`, which the pages use too, so one
+        // variable decides what a deployment calls itself everywhere.
+        let default = crate::Branding::from_env().full().to_lowercase();
+        assert!(
+            !default.contains("usagekit"),
+            "default branding names us: {default}"
+        );
+        assert!(
+            !default.contains("pokit"),
+            "default branding names us: {default}"
+        );
+
+        // And there is no default sending address at all, only the name of the
+        // variable that has to be set.
+        assert!(
+            !FROM_EMAIL_VAR.contains('@'),
+            "there is a default from address"
+        );
+        assert!(!FROM_EMAIL_VAR.contains("pokitapps"));
     }
 
     #[test]

@@ -1,8 +1,10 @@
 # mcp-usage-plane
 
-Hosted usage and entitlement control plane for MCP servers. The paid half of
-the open-core split: the metering crates and the sidecar are Apache-2.0, this
-service is not.
+Usage and entitlement control plane for MCP servers. The paid half of the
+open-core split: the metering crates and the proxy are Apache-2.0, this service
+is source-available under the [Functional Source License](#licence). You may run
+it for your own billing; you may not offer it as a competing service; it becomes
+Apache-2.0 two years after each release.
 
 ```
                           [ control plane ]        <- this service
@@ -445,6 +447,61 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
 | `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |
+| `PLANE_PUBLIC_SITE` | **off** | Serves the marketing pages at `/`, `/pricing`, `/security` and `/docs`. Off unless you are UsageKit Cloud: those pages advertise our pricing and describe how *we* operate |
+| `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark, page titles and outgoing mail |
+| `PLANE_PRODUCT_SUFFIX` | none | A second word set apart in the wordmark, as "Cloud" is in "UsageKit Cloud" |
+| `EMAIL_SERVICE_URL` | none | Your transactional email service. Any https endpoint; plaintext only on loopback |
+| `EMAIL_SERVICE_TOKEN` | none | Bearer token for it. Must be set together with the URL |
+| `EMAIL_FROM_ADDRESS` | required with email | The address mail is sent from. No default, because sending as an address you do not own is how a deployment gets blocklisted |
+| `EMAIL_PRODUCT_NAME` | `Usage control plane` | What the mail calls itself, in subjects and bodies |
+| `EMAIL_OPERATOR_ADDRESS` | the from address | Where access requests are announced |
+| `EMAIL_ALLOW_PLAINTEXT` | off | Permits a plaintext endpoint off loopback, for a mail relay on a private network. The service token then crosses that network in the clear |
+
+## Running it yourself
+
+Nothing in this service assumes we are the ones operating it. Point it at your
+own Postgres and your own Stripe account and no credential of yours reaches us,
+which answers most of what the `/security` page has to be careful about.
+
+```sh
+DATABASE_URL='postgres://...' \
+SECRET_SEALING_KEY="$(head -c 32 /dev/urandom | base64)" \
+  cargo run --release
+```
+
+Then sign in. There is no self-serve signup by design, so create your first
+account and person with `PLANE_PROVISION_SECRET` set and a row in `users` plus
+`memberships`, or grant yourself through the access queue.
+
+Three things behave differently from our deployment, all deliberately:
+
+- **No marketing site.** `PLANE_PUBLIC_SITE` is off unless set, so `/` leads to
+  sign-in and the pages describing our pricing and our operational limits are
+  not served. They would be untrue of your deployment.
+- **No branding of ours.** The wordmark, page titles and outgoing mail all read
+  `PLANE_PRODUCT_NAME`, which defaults to something generic rather than to us.
+  `EMAIL_FROM_ADDRESS` has no default at all, because sending as an address you
+  do not own is how a deployment gets blocklisted.
+- **The billing of customers is dormant.** `PLANE_STRIPE_RESTRICTED_KEY` and
+  `PLANE_PROVISION_SECRET` are how this service charges *its* customers and
+  provisions accounts. Leave them unset and the monthly close returns
+  immediately and the provisioning route answers 404. The machinery is there if
+  you later want to bill your own downstream customers with it.
+
+## Licence
+
+[Functional Source License 1.1, Apache-2.0 future licence](LICENSE.md).
+
+In plain terms: read it, modify it, run it for your own billing, and provide
+professional services around it. What you may not do is offer it to others as a
+product or service that substitutes for this one. Two years after any given
+version is released, that version is available to you under Apache-2.0 with no
+conditions.
+
+The dependency tree is entirely permissive, which is what makes distributing it
+possible at all, and `cargo deny` fails the build if a copyleft-only dependency
+ever arrives. `mcp-usage-core` and `mcp-usage-export`, the crates that decide
+what counts as billable, remain Apache-2.0 on crates.io and are unaffected.
 
 ## Tests
 

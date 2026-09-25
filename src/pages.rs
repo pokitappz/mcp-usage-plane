@@ -65,6 +65,8 @@ pub struct Shell {
     pub robots: &'static str,
     /// Path of the current page, for `aria-current` in the navigation.
     pub nav: &'static str,
+    /// What this deployment calls itself, for the wordmark.
+    pub product: crate::Branding,
 }
 
 impl Shell {
@@ -77,11 +79,12 @@ impl Shell {
     ) -> Self {
         let base = state.public_url.as_deref().unwrap_or(DEV_BASE_URL);
         Self {
-            title: format!("{title} | UsageKit Cloud"),
+            title: format!("{title} | {}", state.product.full()),
             description,
             canonical: format!("{base}{path}"),
             robots: "index,follow",
             nav: path,
+            product: state.product.clone(),
         }
     }
 

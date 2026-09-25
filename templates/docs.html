@@ -82,8 +82,14 @@
       own endpoint instead, signed with a secret you choose, and you make the Stripe call. Set
       <code>kind</code> to <code>webhook</code> on the export destination.
     </p>
+    <p class="prose">
+      Or run the whole thing yourself. The control plane is source-available: you can read it,
+      deploy it against your own Postgres, and connect it to your own Stripe account, so no
+      credential of yours ever reaches us. See <a href="/security">Security</a> for what that
+      changes.
+    </p>
     <div class="panel">
-      <pre class="code"><code>PLANE_URL=https://usagekit.cloud
+      <pre class="code"><code>PLANE_URL=https://usagekit.cloud   # or your own deployment
 PLANE_EDGE_TOKEN=mup_edge_...</code></pre>
       <p class="panel-foot">
         Your server asks for a copy of who may call and at what price, then reports back the

@@ -5,6 +5,14 @@ primary_region = 'yyz'
 
 [build]
 
+# This is the deployment that *is* UsageKit Cloud, so it serves the public site.
+# Every other deployment of this service leaves it unset and serves only the
+# API, the dashboard and sign-in. See `public_site_enabled` in `src/main.rs`.
+[env]
+  PLANE_PUBLIC_SITE = '1'
+  PLANE_PRODUCT_NAME = 'UsageKit'
+  PLANE_PRODUCT_SUFFIX = 'Cloud'
+
 # Default is 5s. Gives the shutdown path room to drain the pool so an in-flight
 # usage transaction commits rather than being cut off, which for the ledger is
 # the difference between a retryable batch and a lost one.

@@ -21,7 +21,7 @@
 <header class="masthead">
   <div class="wrap masthead-inner">
     <a class="wordmark" href="/">
-      <span class="wordmark-name">UsageKit</span><span class="wordmark-suffix">Cloud</span>
+      <span class="wordmark-name">{{ shell.product.name }}</span>{% if !shell.product.suffix.is_empty() %}<span class="wordmark-suffix">{{ shell.product.suffix }}</span>{% endif %}
     </a>
     <nav class="nav" aria-label="Primary">
       <a href="/pricing"{% if shell.nav == "/pricing" %} aria-current="page"{% endif %}>Pricing</a>
@@ -40,7 +40,7 @@
 <footer class="footer">
   <div class="wrap footer-inner">
     <div class="footer-block">
-      <p class="footer-name">UsageKit Cloud</p>
+      <p class="footer-name">{{ shell.product.full() }}</p>
       <p class="footer-note">Usage billing for MCP servers. The meter itself is open source and works without an account.</p>
     </div>
     <div class="footer-block">
