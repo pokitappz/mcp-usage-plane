@@ -570,8 +570,9 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
 /// # Errors
 ///
 /// Propagates the database error. The caller is expected to have already
-/// decided that this address should get an account; see
-/// [`crate::access::membership_for`] for the check that it does not have one.
+/// decided that this address should get an account. Creating a person who
+/// already belongs to another account is allowed and does nothing surprising:
+/// the membership insert is a no-op on conflict.
 pub async fn attach_person(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     email: &str,

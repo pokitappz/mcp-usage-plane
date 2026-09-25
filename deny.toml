@@ -49,15 +49,16 @@ allow = [
     "Unlicense",           # byteorder, memchr, each offered alongside MIT
 ]
 confidence-threshold = 0.93
-exceptions = []
+# Scoped to this crate by name, deliberately. BUSL-1.1 is what *this* is
+# licensed under; it is not something a dependency may arrive carrying. Putting
+# it in `allow` above would say the opposite and weaken the one list whose whole
+# job is policing what we take on.
+exceptions = [{ crate = "mcp-usage-plane", allow = ["BUSL-1.1"] }]
 
-# `mcp-usage-plane` carries `license-file = "LICENSE.md"` rather than a `license`
-# expression. `BUSL-1.1` does have an SPDX identifier, but cargo-deny would then
-# have to be told to allow it in a list whose whole purpose is refusing licences
-# we have not accepted, and allowing our own would weaken that list for the
-# dependencies it exists to police. `plane-sqlx-postgres` is an internal facade with no
-# licence field at all. Both are `publish = false`, so ignoring them here is
-# narrower than inventing a licence string that would then have to be kept true.
+# This crate is published now, so it is no longer private and this setting does
+# not cover it. Its licence is handled by the `exceptions` entry above, which
+# allows BUSL-1.1 for this crate by name and for nothing else. The setting stays
+# because it costs nothing and would apply again to any unpublished member.
 [licenses.private]
 ignore = true
 

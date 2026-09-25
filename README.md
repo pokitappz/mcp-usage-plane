@@ -69,10 +69,7 @@ prices.
 | `POST /v1/auth/verify` | none | Redeem a code for a browser session |
 | `GET /v1/auth/session` | session | Who the caller is and which account they act on |
 | `DELETE /v1/auth/session` | session | Sign out, deleting the session server side |
-| `POST /v1/accounts` | secret | Operator provisioning. Closed unless a secret is set, and never self-serve |
-| `GET /v1/access-requests` | secret | The queue. Pending by default; `?state=granted,declined,all` |
-| `POST /v1/access-requests/{id}/grant` | secret | Create the account and its owner, and mark the request granted |
-| `POST /v1/access-requests/{id}/decline` | secret | Mark it declined, so the queue drains |
+| `POST /v1/accounts` | secret | Create an account, its two tokens, and optionally the person who signs in. Closed unless a secret is set |
 | `POST /v1/stripe/webhook` | signature | Subscription lifecycle and invoice outcomes from Stripe |
 
 Revocation is absence: a revoked tenant or key simply stops appearing in the
@@ -80,19 +77,14 @@ snapshot, and the sidecar cannot authenticate a key it was never given.
 
 ## Pages
 
-The same process serves the public site and the dashboard. Templates are
-compiled into the binary by Askama, so a broken page is a failed build; the
-stylesheet is read from disk at `ASSETS_DIR`, which the Dockerfile sets
-explicitly because `ServeDir` resolves a relative path against the working
-directory rather than the crate root.
+The service renders three things in a browser: sign-in, the dashboard, and a
+404. The marketing site it used to serve lives in
+[`mcp-usage-plane-web`](https://github.com/pokitappz/mcp-usage-plane-web), so a
+crate somebody installs carries what runs the service and nothing else.
 
 | Route | Who | Purpose |
 |---|---|---|
-| `GET /` | anyone | The measurement, the positioning, and the access form |
-| `GET /pricing` | anyone | $0.50 per 10,000 metered events, free under 50,000 |
-| `GET /security` | anyone | What is stored, what is sealed, and what is not done yet |
-| `GET /docs` | anyone | Pointers to the Apache-2.0 crates and the contracts |
-| `POST /request-access` | anyone | Queue an access request. Origin-checked and rate limited |
+| `GET /` | anyone | Redirects to sign-in |
 | `GET /signin` | anyone | Ask for a sign-in code |
 | `POST /signin` | anyone | Send one, then show the code form |
 | `POST /signin/verify` | anyone | Redeem a code and open a session |
@@ -100,30 +92,28 @@ directory rather than the crate root.
 | `GET /app` | session | The dashboard. Anonymous gets a redirect, never markup |
 | `POST /app/tokens` | session | Mint an account credential, shown once on the page |
 | `POST /app/tokens/{digest}/revoke` | session | Revoke one |
-| `POST /app/tenants/{key}/keys` | session | Mint a tenant key, shown once on the page |
-| `POST /app/dead-letters/{id}/resolve` | session | Mark one reconciled |
+| `POST /app/tenants/{key}/keys` | session | Mint a customer key, shown once on the page |
+| `POST /app/dead-letters/{id}/resolve` | session | Mark one handled |
+| `GET /assets/{file}` | anyone | The stylesheet and icon, compiled into the binary |
 
 Three properties hold across all of them.
 
 **The dashboard is gated by the server.** An anonymous request to `/app` gets a
-redirect and an empty body, not the shell with a client-side bounce. The panel
-names, routes and structure are not public.
+redirect and an empty body, not the shell with a client-side bounce.
 
 **Nothing inline.** Every response carries a content security policy with no
-`unsafe-inline` and no `unsafe-eval`, for scripts and for styles. There is no
-JavaScript at all: every action is a form post that redirects, and the
-`SameSite=Lax` cookie plus an `Origin` check that fails closed is the whole CSRF
-story. A test renders every page and fails the build on an inline script, style
-or handler.
+`unsafe-inline` and no `unsafe-eval`. There is no JavaScript at all: every
+action is a form post that redirects, and the `SameSite=Lax` cookie plus an
+`Origin` check that fails closed is the whole CSRF story. A test renders the
+pages and fails the build on an inline script, style or handler, and another
+fails if a class reaches the markup without a rule in the stylesheet.
 
 **A minted credential is rendered, never redirected with.** A redirect would
-have to carry it in a query string, which puts it in browser history, in proxy
-logs and in the next request's referrer.
+carry it in a query string, which puts it in browser history and proxy logs.
 
 Page handlers call the same functions the JSON handlers call rather than a
 second copy of the SQL, and a test asserts the figures on the page match the
-figures `GET /v1/usage` returns. Two copies of a billing query drift, and the
-one that drifts silently is the one a customer is reading.
+figures `GET /v1/usage` returns.
 
 ## Two kinds of caller
 
@@ -162,48 +152,25 @@ Without it somebody invited as `Person@Example.com` who types
 answered identically to a known one, they are told a code was sent and wait for
 mail that was never generated.
 
-## The access queue
+## Creating the first account
 
-Access is granted by hand, and this is the flow that does it. The form on the
-landing page writes a row; nothing else happens until a person decides.
+Nothing can sign in to an empty database, so provisioning creates the account,
+its two tokens and its owner in one request.
 
 ```sh
-PLANE_URL=https://usagekit.cloud PLANE_PROVISION_SECRET=... \
-  scripts/access-queue.sh list
-
-scripts/access-queue.sh grant 12 --name "Northwind Tools"
-scripts/access-queue.sh decline 13
+curl -fsS -X POST "$PLANE_URL/v1/accounts" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Northwind Tools",
+       "provision_secret":"'"$PLANE_PROVISION_SECRET"'",
+       "owner_email":"founder@northwind.example"}'
 ```
 
-Granting is one transaction: the account, its billing row, the person, their
-membership and the decision all commit together or none of them do. The failure
-that prevents is an account created while the request stays pending, which an
-operator then grants again, producing a second account nobody will ever open.
+The two tokens come back once and are not recoverable. `owner_email` is
+optional: leave it out for an account that only serves machines, and no person
+is created. Supply it and that address can sign in at `/signin` immediately.
 
-Four refusals, each for a reason worth knowing:
-
-| Situation | Answer |
-|---|---|
-| Already granted | `409`, naming the request. Still true after the person is deleted, so an old queue cannot be reprocessed into a duplicate |
-| Already declined | `409`. A decision is not reversible through this route |
-| The address already has an account | `409`, naming that account. A session resolves to the oldest membership and there is no account switcher, so a second account would be one they could never reach |
-| No `PLANE_PROVISION_SECRET` configured | `404`, not `401`. A deployment without operator access should not advertise that these routes exist |
-
-**Granting mints no credentials.** It produces an account and somebody who can
-sign in; they mint their own tokens from the dashboard, which is the one place
-a credential can be shown to the person who will actually hold it. This is the
-deliberate difference from `POST /v1/accounts`, which does mint a pair because
-it provisions accounts that may have no human at all.
-
-The notification is sent after the commit and is reported rather than hidden:
-the grant response carries `notified`, so an operator whose mail service is
-down knows to tell the person by hand instead of waiting for a sign-in that is
-never attempted.
-
-**There is no self-serve signup, and selling the product does not need one.**
-Revenue and self-service are separate questions: an account is created by hand,
-its Stripe customer is linked, its terms are set, and the monthly close bills it
-like any other.
+The route answers 404 unless `PLANE_PROVISION_SECRET` is set, which is the
+default, so a fresh deployment is not an open account factory.
 
 ## Request bounds
 
@@ -394,33 +361,6 @@ the correct reading of "this customer's quota". Where such tenants disagree on
 unit price the highest applies, because over-stating spend is the safe direction
 for a spend cap.
 
-## Shadow migration
-
-Moving a live, billed application onto this plane is done by comparison, not by
-repointing and hoping. `scripts/` has the two halves:
-
-```sh
-# 2. Create an account and print the secrets that enable the mirror.
-PLANE_URL=https://mcp-usage-plane.fly.dev PLANE_PROVISION_SECRET=... \
-  scripts/provision-shadow.sh --name aggors --app aggors
-
-# 3. After some traffic, compare the two ledgers by aggregate identifier.
-AGGORS_DATABASE_URL=... PLANE_DATABASE_URL=... \
-  scripts/reconcile-shadow.sh
-```
-
-Step 1 is deploying the plane; `provision-shadow.sh` checks `/healthz` first and
-says so rather than failing partway through.
-
-Reconciliation separates three outcomes deliberately, because they mean
-different things. A **unit mismatch** is a real disagreement between the two
-metering implementations and is what the comparison is for. **Missing from the
-plane** is a delivery gap - the mirror drops rather than failing, by design, so
-this is expected after any window the plane was unreachable. **Missing from the
-source** should not happen at all and means something other than the mirror
-wrote to that account. The script exits non-zero for the first and third, and
-zero for a delivery gap alone.
-
 ## Running it
 
 ```sh
@@ -440,7 +380,6 @@ gets a first credential without a chicken-and-egg problem.
 | `DATABASE_URL` | required | Postgres connection string |
 | `PORT` | `8081` | Listen port |
 | `DATABASE_MAX_CONNECTIONS` | `10` | Pool size |
-| `MIGRATIONS_DIR` | `./migrations` | Where migrations are read from at startup |
 | `SECRET_SEALING_KEY` | none | Seals customer billing credentials. Required before one can be stored |
 | `EXPORT_DRAIN_INTERVAL_SECONDS` | `30` | How often usage is forwarded |
 | `ALLOW_LOOPBACK_DESTINATIONS` | off | Tests only. Permits a loopback export destination |
@@ -448,14 +387,13 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
 | `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |
-| `PLANE_PUBLIC_SITE` | **off** | Serves the marketing pages at `/`, `/pricing`, `/security` and `/docs`. Off unless you are UsageKit Cloud: those pages advertise our pricing and describe how *we* operate |
 | `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark, page titles and outgoing mail |
 | `PLANE_PRODUCT_SUFFIX` | none | A second word set apart in the wordmark, as "Cloud" is in "UsageKit Cloud" |
 | `EMAIL_SERVICE_URL` | none | Your transactional email service. Any https endpoint; plaintext only on loopback |
 | `EMAIL_SERVICE_TOKEN` | none | Bearer token for it. Must be set together with the URL |
 | `EMAIL_FROM_ADDRESS` | required with email | The address mail is sent from. No default, because sending as an address you do not own is how a deployment gets blocklisted |
 | `EMAIL_PRODUCT_NAME` | `Usage control plane` | What the mail calls itself, in subjects and bodies |
-| `EMAIL_OPERATOR_ADDRESS` | the from address | Where access requests are announced |
+| `EMAIL_OPERATOR_ADDRESS` | the from address | Where operational notices are sent |
 | `EMAIL_ALLOW_PLAINTEXT` | off | Permits a plaintext endpoint off loopback, for a mail relay on a private network. The service token then crosses that network in the clear |
 
 ## Running it yourself
@@ -467,20 +405,22 @@ Everything below is free. Putting it in front of real customers needs a
 subscription; see [Licence](#licence).
 
 ```sh
+cargo install mcp-usage-plane
+
 DATABASE_URL='postgres://...' \
 SECRET_SEALING_KEY="$(head -c 32 /dev/urandom | base64)" \
-  cargo run --release
+  mcp-usage-plane
 ```
 
-Then sign in. There is no self-serve signup by design, so create your first
-account and person with `PLANE_PROVISION_SECRET` set and a row in `users` plus
-`memberships`, or grant yourself through the access queue.
+The migrations, the templates and the stylesheet are compiled into the binary,
+so that is the whole install: one file, a Postgres, and two variables. There is
+no directory to place beside it and nothing to keep in sync.
 
-Three things behave differently from our deployment, all deliberately:
+Then create your first account and its owner, as above, and sign in at
+`/signin`.
 
-- **No marketing site.** `PLANE_PUBLIC_SITE` is off unless set, so `/` leads to
-  sign-in and the pages describing our pricing and our operational limits are
-  not served. They would be untrue of your deployment.
+Two things are worth knowing, both deliberate:
+
 - **No branding of ours.** The wordmark, page titles and outgoing mail all read
   `PLANE_PRODUCT_NAME`, which defaults to something generic rather than to us.
   `EMAIL_FROM_ADDRESS` has no default at all, because sending as an address you

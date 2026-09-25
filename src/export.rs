@@ -299,7 +299,7 @@ struct Prepared {
 }
 
 fn prepare(
-    rows: &[sqlx::PgRow],
+    rows: &[sqlx::postgres::PgRow],
     direction: Direction,
     customer_override: Option<&str>,
 ) -> Result<Prepared, sqlx::Error> {

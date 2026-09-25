@@ -45,11 +45,9 @@ const PROVISION_SUBJECT: &str = "any";
 
 /// Header carrying the operator secret.
 ///
-/// The routes in [`crate::access`] need to present it on a `GET`, which has no
-/// body to put it in, and a query parameter would write the secret into every
-/// access log and shell history between here and the server. One header works
-/// for every operator route; [`ProvisionAccount::provision_secret`] still works
-/// so the existing scripts do not break.
+/// An alternative to putting it in the body, for callers that would rather not,
+/// and the only option for a request with no body. A query parameter would
+/// write the secret into every access log between here and the server.
 pub const SECRET_HEADER: &str = "x-provision-secret";
 
 /// A request to create an account.
@@ -59,6 +57,15 @@ pub struct ProvisionAccount {
     pub name: String,
     /// The operator secret.
     pub provision_secret: String,
+    /// Who will sign in to it.
+    ///
+    /// Optional, because an account that only serves machines needs no person.
+    /// Supply it and this is the whole path from nothing to somebody able to
+    /// open the dashboard: without it, the account exists and no human can
+    /// reach it, and the only remedy is writing `users` and `memberships` rows
+    /// by hand.
+    #[serde(default)]
+    pub owner_email: Option<String>,
 }
 
 /// A new account and its credentials. Both tokens appear exactly once, here.
@@ -68,8 +75,10 @@ pub struct ProvisionedAccount {
     pub account_id: String,
     /// Manages tenants, prices and export configuration.
     pub admin_token: String,
-    /// Handed to a sidecar. Cannot reach pricing.
+    /// Handed to a server that meters. Cannot reach pricing.
     pub edge_token: String,
+    /// The person who may now sign in, when one was asked for.
+    pub owner_email: Option<String>,
 }
 
 /// Operator routes.
@@ -182,6 +191,16 @@ async fn provision(
     let admin_token = mint_token("mup_admin");
     let edge_token = mint_token("mup_edge");
 
+    // Shaped before the transaction opens, so a bad address is refused without
+    // having created anything.
+    let owner_email = body
+        .owner_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(crate::people::normalize_email)
+        .transpose()?;
+
     let mut tx = state.pool.begin().await?;
     let account_id = create_account(&mut tx, name).await?;
     for (token, scope) in [(&admin_token, "admin"), (&edge_token, "edge")] {
@@ -194,6 +213,11 @@ async fn provision(
         .bind(scope)
         .execute(&mut *tx)
         .await?;
+    }
+    // In the same transaction as the account, so there is no state where the
+    // account exists and its owner does not.
+    if let Some(email) = owner_email.as_deref() {
+        crate::people::attach_person(&mut tx, email, &account_id).await?;
     }
     tx.commit().await?;
 
@@ -211,5 +235,6 @@ async fn provision(
         account_id,
         admin_token,
         edge_token,
+        owner_email,
     }))
 }

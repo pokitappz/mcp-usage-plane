@@ -9,7 +9,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::pedantic)]
 
-mod access;
 mod accounts;
 mod app;
 mod auth;
@@ -32,6 +31,7 @@ mod web;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use axum::response::{IntoResponse as _, Response};
 use axum::{Json, Router, routing};
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// load bearing: body limit inside the timeout, timeout inside the trace, and
 /// the response policy outermost so nothing can serve a page without it.
 fn build_router(state: AppState) -> Router {
-    let router = Router::new()
+    Router::new()
         .route("/healthz", routing::get(healthz))
         .merge(tenants::router())
         .merge(usage::router())
@@ -207,37 +207,16 @@ fn build_router(state: AppState) -> Router {
         .merge(pricing::router())
         .merge(people::router())
         .merge(accounts::router())
-        .merge(access::router())
         .merge(app::router())
-        // `ServeDir` resolves against the process working directory rather than
-        // the crate root, which is why the Dockerfile copies `static/` next to
-        // the binary. Getting this wrong fails only in the container, where
-        // local development looks fine and production serves an unstyled page.
-        .nest_service(
-            "/assets",
-            tower_http::services::ServeDir::new(assets_dir()).precompressed_gzip(),
-        );
-
-    // The marketing site is ours, and this service is source-available, so it
-    // is off unless a deployment asks for it. That direction is the whole
-    // point: an operator who never reads this variable serves no marketing at
-    // all, rather than serving ours from their domain. Our own deployment sets
-    // it. See `public_site_enabled`.
-    let router = if public_site_enabled() {
-        router.merge(pages::router()).fallback(pages::not_found)
-    } else {
-        // Without the site there is no shell to render a 404 into, and the
-        // marketing 404 links to pages that would not exist. A plain answer is
-        // the honest one.
-        router
-            .route(
-                "/",
-                routing::get(|| async { axum::response::Redirect::to("/signin") }),
-            )
-            .fallback(|| async { (axum::http::StatusCode::NOT_FOUND, "Not found") })
-    };
-
-    router
+        .route("/assets/{file}", routing::get(asset))
+        // The front door is the dashboard. The marketing site this used to
+        // serve lives in its own repository now, because a crate somebody
+        // installs should not carry somebody else's shop front.
+        .route(
+            "/",
+            routing::get(|| async { axum::response::Redirect::to("/signin") }),
+        )
+        .fallback(pages::not_found)
         .layer(axum::extract::DefaultBodyLimit::max(ADMIN_BODY_LIMIT))
         // Outermost, so it also bounds a client that is slow to send its body.
         // Without it a trickling request holds a pool connection for as long as
@@ -318,25 +297,23 @@ impl Branding {
     }
 }
 
-/// Whether this deployment serves the public marketing site.
-///
-/// Off by default. This service is distributed under a licence that lets other
-/// people run it, and the pages under `pages::router` advertise our pricing and
-/// make claims about how *we* operate, most of which are untrue of somebody
-/// else's deployment. A self-hoster gets the API, the dashboard and sign-in;
-/// the shop front stays ours.
-fn public_site_enabled() -> bool {
-    std::env::var("PLANE_PUBLIC_SITE")
-        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-}
-
 /// Where the stylesheet and the icon are served from.
 ///
-/// Overridable because the working directory is not the same in a container, in
-/// `cargo run`, and under `cargo test`, and a stylesheet that silently 404s
-/// looks like a broken deployment rather than a misconfiguration.
-fn assets_dir() -> String {
-    std::env::var("ASSETS_DIR").unwrap_or_else(|_| "./static/assets".to_owned())
+/// Compiled in rather than read from disk, for the same reason as the
+/// migrations: an installed binary has no directory beside it. It also retires
+/// the sharpest edge this service had, which was that `ServeDir` resolved
+/// against the working directory, so the stylesheet loaded under `cargo run`
+/// and silently 404ed in the container.
+async fn asset(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+    let (body, content_type): (&'static [u8], &'static str) = match file.as_str() {
+        "usagekit.css" => (
+            include_bytes!("../static/assets/usagekit.css"),
+            "text/css; charset=utf-8",
+        ),
+        "mark.svg" => (include_bytes!("../static/assets/mark.svg"), "image/svg+xml"),
+        _ => return (axum::http::StatusCode::NOT_FOUND, "Not found").into_response(),
+    };
+    ([(axum::http::header::CONTENT_TYPE, content_type)], body).into_response()
 }
 
 /// Liveness. Deliberately touches the database: a plane that cannot reach
@@ -369,11 +346,21 @@ async fn healthz(
     }
 }
 
+/// Every migration, compiled into the binary.
+///
+/// Read from disk at startup until this crate became something people install
+/// from a registry, at which point there is no directory to read: `cargo
+/// install` copies one file. Embedding also removes a way to be wrong in a
+/// container, where a missing directory turned into a service that refused to
+/// start for a reason nobody could see from the outside.
+///
+/// The cost is that changing a migration means rebuilding, which is the right
+/// trade for something distributed as a binary.
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
 async fn migrate(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::var("MIGRATIONS_DIR").unwrap_or_else(|_| "./migrations".to_owned());
-    let migrator = sqlx::migrate::Migrator::new(std::path::Path::new(&dir)).await?;
-    migrator.run(pool).await?;
-    tracing::info!(dir, "migrations applied");
+    MIGRATIONS.run(pool).await?;
+    tracing::info!(count = MIGRATIONS.iter().count(), "migrations applied");
     Ok(())
 }
 
