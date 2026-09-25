@@ -367,7 +367,7 @@ async fn fetch_one(state: &AppState, account_id: &str, tenant_key: &str) -> ApiR
     row_to_view(&row)
 }
 
-fn row_to_view(row: &sqlx::postgres::PgRow) -> ApiResult<TenantView> {
+fn row_to_view(row: &sqlx::PgRow) -> ApiResult<TenantView> {
     let prices: serde_json::Value = row.try_get("prices")?;
     Ok(TenantView {
         tenant_key: row.try_get("tenant_key")?,

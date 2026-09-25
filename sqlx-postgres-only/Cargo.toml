@@ -1,0 +1,37 @@
+[package]
+name = "plane-sqlx-postgres"
+description = "PostgreSQL-only SQLx facade, so MySQL and its RSA dependency stay out of the lockfile."
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pokitappz/mcp-usage-plane"
+keywords = ["sqlx", "postgres"]
+categories = ["database"]
+
+# Published only because `mcp-usage-plane` depends on it and crates.io refuses
+# path dependencies. It exists because depending on the `sqlx` umbrella crate
+# puts every one of its optional drivers into Cargo.lock, whatever features are
+# selected, and `cargo audit` reads the lockfile: MySQL arrives, `rsa` arrives
+# with it, and `rsa` has an open advisory. Depending on `sqlx-core` and
+# `sqlx-postgres` directly is the only way to keep them out.
+#
+# `cargo tree` will tell you the umbrella crate is fine. It resolves the build
+# graph for one target; the lockfile is neither.
+
+[lib]
+name = "sqlx"
+
+[dependencies]
+sqlx-core = { version = "=0.8.6", default-features = false, features = [
+    "_rt-tokio",
+    "_tls-rustls-ring-webpki",
+    "chrono",
+    "json",
+    "migrate",
+] }
+sqlx-postgres = { version = "=0.8.6", default-features = false, features = [
+    "chrono",
+    "json",
+    "migrate",
+] }

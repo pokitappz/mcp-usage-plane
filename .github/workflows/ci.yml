@@ -61,12 +61,32 @@ jobs:
           # database is reachable.
           PLANE_REQUIRE_DATABASE: "1"
         run: cargo +stable test --workspace --all-targets --all-features --locked
-      - name: Check the crate still packages
-        # `--dry-run` builds from the packaged archive, which is the only thing
-        # that proves the embedded migrations, templates and stylesheet are
-        # actually included. A missing `include` entry compiles here and fails
-        # for everyone installing from the registry.
-        run: cargo +stable publish --dry-run --locked
+      - name: Check the crate still packages what it needs
+        # The migrations, templates and stylesheet are compiled in, so a missing
+        # `include` entry builds fine here and fails for everyone installing
+        # from the registry. This asserts they are in the archive.
+        #
+        # `cargo publish --dry-run` would be the stronger check, because it
+        # builds from the archive, but it cannot resolve the facade until that
+        # is published. Run it by hand before publishing.
+        run: |
+          set -euo pipefail
+          files="$(cargo +stable package --list --locked)"
+          for required in \
+            migrations/0001_initial.sql \
+            templates/app.html \
+            static/assets/usagekit.css \
+            LICENSE.md
+          do
+            grep --quiet "^$required$" <<<"$files" \
+              || { echo "$required is missing from the package" >&2; exit 1; }
+          done
+          for excluded in tests .github Dockerfile deny.toml; do
+            if grep --quiet "^$excluded" <<<"$files"; then
+              echo "$excluded should not be published" >&2
+              exit 1
+            fi
+          done
 
       - name: Treat documentation warnings as errors
         env:
@@ -94,6 +114,22 @@ jobs:
         run: cargo +stable install cargo-audit --locked --version 0.22.2
       - name: Check RustSec advisories
         run: cargo +stable audit
+
+      # A named guard for the thing the advisory check caught once already.
+      # Depending on the `sqlx` umbrella crate puts every one of its optional
+      # drivers into Cargo.lock whatever features are selected, which brings
+      # MySQL and `rsa`. `cargo tree` reports that tree as clean, because it
+      # resolves one target's build graph and the lockfile is neither. This
+      # reads the lockfile, which is what `cargo audit` reads.
+      - name: Keep MySQL out of the lockfile
+        run: |
+          set -euo pipefail
+          for crate in rsa sqlx-mysql sqlx-sqlite sqlx-macros; do
+            if grep --quiet "^name = \"$crate\"$" Cargo.lock; then
+              echo "$crate is in Cargo.lock; something is depending on the sqlx umbrella crate" >&2
+              exit 1
+            fi
+          done
 
   deny:
     name: License, source, and ban checks

@@ -1,3 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["sqlx-postgres-only"]
+
 [package]
 name = "mcp-usage-plane"
 description = "Usage and entitlement control plane for MCP servers."
@@ -47,18 +51,21 @@ tokio = { version = "1.53.0", features = ["macros", "net", "rt-multi-thread", "s
 # `fs` serves the stylesheet. Note that `ServeDir` resolves against the process
 # working directory, not the crate root, which is why the Dockerfile copies
 # `static/` next to the binary.
-tower-http = { version = "0.6.8", default-features = false, features = ["fs", "limit", "timeout", "trace"] }
+tower-http = { version = "0.6.8", default-features = false, features = ["limit", "timeout", "trace"] }
 
 # Compile-time HTML templates: a typo in a template is a build failure rather
 # than a 500 in front of a customer, and there is no runtime template loading to
 # get wrong in a container.
 askama = "0.16"
 
-sqlx = { version = "0.8.6", default-features = false, features = [
-    # `macros` is what carries `sqlx::migrate!`; `migrate` alone gives the module
-    # but not the macro that embeds the files.
-    "postgres", "runtime-tokio", "tls-rustls-ring-webpki", "migrate", "macros", "chrono", "json",
-] }
+# Not the `sqlx` umbrella crate. Depending on it puts every optional driver
+# into Cargo.lock whatever features are selected, which means MySQL, which means
+# `rsa` and its open advisory. `cargo audit` reads the lockfile, so the tree
+# looking clean to `cargo tree` is not the same as being clean.
+#
+# `version` as well as `path` so this resolves from crates.io when published and
+# from here when developing.
+sqlx = { package = "plane-sqlx-postgres", version = "0.1.0", path = "sqlx-postgres-only" }
 
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

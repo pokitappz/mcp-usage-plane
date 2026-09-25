@@ -348,19 +348,105 @@ async fn healthz(
 
 /// Every migration, compiled into the binary.
 ///
-/// Read from disk at startup until this crate became something people install
-/// from a registry, at which point there is no directory to read: `cargo
-/// install` copies one file. Embedding also removes a way to be wrong in a
-/// container, where a missing directory turned into a service that refused to
-/// start for a reason nobody could see from the outside.
+/// Read from disk at startup until this became something people install from a
+/// registry, at which point there is no directory to read: `cargo install`
+/// copies one file. Embedding also removes a way to be wrong in a container,
+/// where a missing directory turned into a service that refused to start for a
+/// reason nobody could see from the outside.
 ///
-/// The cost is that changing a migration means rebuilding, which is the right
-/// trade for something distributed as a binary.
-static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+/// # Why not `sqlx::migrate!`
+///
+/// That macro is the obvious tool and it is not usable here. It lives behind
+/// sqlx's `macros` feature, which pulls `sqlx-macros` and with it `sqlx-mysql`
+/// and `rsa` into the lockfile. `rsa` has an open advisory, and `cargo audit`
+/// reads the lockfile rather than the resolved build graph, so the tree looks
+/// clean to `cargo tree` while the audit fails. Keeping `MySQL` out of the
+/// lockfile is the reason this project carried a hand-written sqlx facade for
+/// as long as it did.
+///
+/// So the files are listed below and parsed the way sqlx parses them, which
+/// matters: the version, description and checksum have to come out identical or
+/// a database migrated by an earlier build would refuse the next one.
+const MIGRATION_FILES: &[(&str, &str)] = &[
+    (
+        "0001_initial.sql",
+        include_str!("../migrations/0001_initial.sql"),
+    ),
+    (
+        "0002_billing.sql",
+        include_str!("../migrations/0002_billing.sql"),
+    ),
+    (
+        "0003_billing_integrity.sql",
+        include_str!("../migrations/0003_billing_integrity.sql"),
+    ),
+    (
+        "0004_plane_pricing.sql",
+        include_str!("../migrations/0004_plane_pricing.sql"),
+    ),
+    (
+        "0005_per_event_pricing.sql",
+        include_str!("../migrations/0005_per_event_pricing.sql"),
+    ),
+    (
+        "0006_people.sql",
+        include_str!("../migrations/0006_people.sql"),
+    ),
+    (
+        "0007_access_decisions.sql",
+        include_str!("../migrations/0007_access_decisions.sql"),
+    ),
+    (
+        "0008_drop_access_requests.sql",
+        include_str!("../migrations/0008_drop_access_requests.sql"),
+    ),
+];
+
+/// Build the migrator from the embedded files.
+///
+/// Mirrors `sqlx_core::migrate::source`: the version is the filename up to the
+/// first underscore, the description is the rest with underscores turned into
+/// spaces, and a file opting out of a transaction says so on its first line.
+fn migrator() -> sqlx::migrate::Migrator {
+    use sqlx::migrate::{Migration, MigrationType};
+
+    let migrations: Vec<Migration> = MIGRATION_FILES
+        .iter()
+        .map(|(name, sql)| {
+            let (version, rest) = name
+                .split_once('_')
+                .unwrap_or_else(|| panic!("migration {name} has no version prefix"));
+            let version: i64 = version
+                .parse()
+                .unwrap_or_else(|_| panic!("migration {name} has a non-numeric version"));
+            let migration_type = MigrationType::from_filename(rest);
+            let description = rest
+                .trim_end_matches(migration_type.suffix())
+                .replace('_', " ");
+            Migration::new(
+                version,
+                description.into(),
+                migration_type,
+                (*sql).into(),
+                sql.starts_with("-- no-transaction"),
+            )
+        })
+        .collect();
+
+    // The fields are public precisely so `migrate!()` can fill them in, and
+    // this is the same shape that macro expands to.
+    sqlx::migrate::Migrator {
+        migrations: migrations.into(),
+        ignore_missing: false,
+        locking: true,
+        no_tx: false,
+    }
+}
 
 async fn migrate(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    MIGRATIONS.run(pool).await?;
-    tracing::info!(count = MIGRATIONS.iter().count(), "migrations applied");
+    let migrator = migrator();
+    migrator.run(pool).await?;
+    tracing::info!(count = migrator.iter().count(), "migrations applied");
     Ok(())
 }
 
