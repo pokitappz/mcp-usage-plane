@@ -335,19 +335,23 @@ async fn usage_is_forwarded_downstream_and_marked_exported() {
         )
         .await;
 
-    eventually("the aggregate to reach Stripe", || async {
-        !fake.identifiers().is_empty()
+    // Waiting for the request to arrive at the provider is not the same as
+    // waiting for the work to finish: the row is marked exported only once that
+    // call returns, so `pending` is still 1 for as long as the response takes.
+    // Locally that window is microseconds and this passed for months; on a
+    // loaded runner it is long enough to fail.
+    eventually("the aggregate to be marked exported", || async {
+        let (_, view) = plane
+            .admin(Method::GET, "/v1/export/destination", None)
+            .await;
+        view["pending"] == 0
     })
     .await;
-    assert_eq!(fake.identifiers(), vec!["agg-1"]);
 
+    assert_eq!(fake.identifiers(), vec!["agg-1"]);
     let (_, view) = plane
         .admin(Method::GET, "/v1/export/destination", None)
         .await;
-    assert_eq!(
-        view["pending"], 0,
-        "a delivered aggregate must not stay pending"
-    );
     assert_eq!(view["dead_lettered"], 0);
 }
 
