@@ -216,9 +216,12 @@ async fn the_home_page_answers_a_buyer_before_it_answers_an_engineer() {
 
     // The three things a non-technical reader needs and the page did not used
     // to give them: what it costs, what the problem costs, and what MCP is.
+    // Tied to the hero strip rather than to the page, for the same reason as
+    // the pricing panel: `$299 a month` also appears in the prose further down,
+    // so asserting the page merely mentions it passed with the hero emptied.
     assert!(
-        body.contains("$0.50 per 10,000 billable events"),
-        "the price is not on the home page, so a buyer has to go looking for it"
+        body.contains("<strong>$299 a month</strong> per production deployment."),
+        "the price is not in the hero, so a buyer has to go looking for it"
     );
     assert!(
         body.contains("Model Context Protocol"),
@@ -236,12 +239,13 @@ async fn the_home_page_answers_a_buyer_before_it_answers_an_engineer() {
         "the reproduce-it-yourself command was lost in the rewrite"
     );
 
-    // Both ways of paying are on the page a buyer lands on. The self-hosted
-    // price is the one somebody with a data-residency problem is looking for,
-    // and burying it on another page loses exactly that buyer.
+    // What is free matters as much as what it costs. Running it is free until
+    // real customers are billed from it, and that is what gets somebody to try
+    // it at all; a page that leads with a price and hides the free path
+    // converts nobody.
     assert!(
-        body.contains("$299 a month"),
-        "the self-hosted price is not on the home page"
+        body.contains("outside production"),
+        "the home page never says what is free"
     );
     for figure in ["45", "152", "453"] {
         assert!(
@@ -252,38 +256,41 @@ async fn the_home_page_answers_a_buyer_before_it_answers_an_engineer() {
 }
 
 #[tokio::test]
-async fn the_pricing_page_states_both_ways_of_paying() {
+async fn the_pricing_page_matches_what_the_licence_says() {
     let url = require_db!();
     let plane = Plane::start(&url).await;
-    let page = get(&plane, "/pricing").await;
-    let body = &page.body;
+    let body = get(&plane, "/pricing").await.body;
 
-    // Hosted, priced on usage.
-    assert!(body.contains("$0.50"), "the hosted price is missing");
-    assert!(body.contains("50,000"), "the free allowance is missing");
-
-    // Self-hosted, priced flat. The licence says production use needs a
-    // subscription, so the page has to say what one costs, or the licence is
-    // pointing at a price that does not exist.
     // Tied to the price panel rather than to the page. `$299` also appears in
     // the prose around it, so asserting the page merely mentions the number
     // passed even with the figure itself removed.
     assert!(
         body.contains("<span class=\"price-figure\">$299</span>"),
-        "the self-hosted price is not the figure on the price panel"
+        "the price is not the figure on the price panel"
     );
     assert!(
         body.contains("per month, per deployment"),
-        "the self-hosted price does not say what it is per"
+        "the price does not say what it is per"
     );
+
+    // The licence grants everything except production use and says a
+    // subscription buys that. If this page disagrees with it, one of the two is
+    // lying to somebody who is about to pay.
     for promise in [
         "outside production",
         "Apache-2.0 four years",
         "No charge per event",
+        "no percentage of what you bill",
     ] {
+        assert!(body.contains(promise), "the terms omit {promise:?}");
+    }
+
+    // There is no hosted service at the moment, so nothing here may offer one.
+    // A stale per-event price is a number somebody will ask to pay.
+    for gone in ["$0.50", "per 10,000", "Free under 50,000"] {
         assert!(
-            body.contains(promise),
-            "the self-hosted terms omit {promise:?}"
+            !body.contains(gone),
+            "the pricing page still advertises hosted pricing: {gone:?}"
         );
     }
 }
@@ -454,7 +461,7 @@ async fn an_access_request_is_recorded_and_the_visitor_is_told_so() {
     );
     assert_eq!(
         header(&response, "location"),
-        "/?requested=1#request-access",
+        "/?requested=1#buy",
         "the visitor should land back at the form with an acknowledgement"
     );
 
@@ -519,7 +526,7 @@ async fn an_unusable_address_is_rejected_without_writing_a_row() {
         assert_eq!(response.status, 303, "{attempt}");
         assert_eq!(
             header(&response, "location"),
-            "/?error=email#request-access",
+            "/?error=email#buy",
             "{attempt} did not send the visitor back to fix it"
         );
     }
@@ -576,7 +583,7 @@ async fn access_requests_are_bounded_however_many_addresses_are_used() {
             &[("email", &format!("person{attempt}@example.com"))],
         )
         .await;
-        if header(&response, "location") == "/?error=throttled#request-access" {
+        if header(&response, "location") == "/?error=throttled#buy" {
             refused += 1;
         }
     }

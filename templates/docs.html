@@ -4,7 +4,7 @@
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Docs</p>
-    <h1>Start with the free meter. Add UsageKit Cloud when you need the billing run.</h1>
+    <h1>Start with the free meter. Add the control plane when you need the billing run.</h1>
     <p class="lede">
       The reference documentation lives with the code it describes, where it is version checked and
       cannot drift from what you actually installed. This page is the map.
@@ -55,7 +55,7 @@
       </article>
       <article class="card">
         <h3><a href="https://docs.rs/mcp-usage-edge">mcp-usage-edge</a></h3>
-        <p>The metering proxy, for servers not written in Rust. This is the piece that talks to UsageKit Cloud.</p>
+        <p>The metering proxy, for servers not written in Rust. This is the piece that talks to the control plane.</p>
       </article>
     </div>
   </div>
@@ -64,7 +64,7 @@
 <section class="section section-alt">
   <div class="wrap">
     <p class="micro">Step two, with an account</p>
-    <h2>Point your server at UsageKit Cloud.</h2>
+    <h2>Point your server at your control plane.</h2>
     <p class="prose">
       Provisioning hands you two credentials with deliberately different reach. The edge token goes
       to your servers and cannot read or change pricing. The admin token manages customers,
@@ -83,14 +83,14 @@
       <code>kind</code> to <code>webhook</code> on the export destination.
     </p>
     <p class="prose">
-      Or run the whole thing yourself. The source is available: read it, deploy it against your
-      own Postgres, and connect it to your own Stripe account, so no credential of yours ever
-      reaches us. Free outside production, $299 a month in front of customers. See
+      The control plane runs on your own infrastructure: your Postgres, your Stripe account, no
+      credential of yours anywhere near us. Free to read, build and run outside production, and
+      $299 a month once real customers are being billed from it. See
       <a href="/pricing">Pricing</a> for the terms and <a href="/security">Security</a> for what
-      self-hosting changes.
+      it stores.
     </p>
     <div class="panel">
-      <pre class="code"><code>PLANE_URL=https://usagekit.cloud   # or your own deployment
+      <pre class="code"><code>PLANE_URL=https://billing.your-company.example
 PLANE_EDGE_TOKEN=mup_edge_...</code></pre>
       <p class="panel-foot">
         Your server asks for a copy of who may call and at what price, then reports back the

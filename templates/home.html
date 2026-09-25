@@ -9,22 +9,22 @@
       If you bill per API request, you are charging about three times what you should. We measured
       it, the test is public, and sooner or later a customer will measure it too. UsageKit Cloud
       counts what your customers actually received, and turns that into an invoice you do not have
-      to watch over.
+      to watch over. You run it on your own servers.
     </p>
 
     <p class="price-strip">
-      <strong>$0.50 per 10,000 billable events.</strong>
-      Free under 50,000 a month, or <strong>$299 a month</strong> to run it on your own servers.
+      <strong>$299 a month</strong> per production deployment.
+      Free to read, build and run outside production.
       <a href="/pricing">See the full pricing</a>
     </p>
 
     <div class="hero-actions">
-      <a class="button" href="#request-access">Request access</a>
+      <a class="button" href="https://github.com/pokitappz/mcp-usage-plane">Run it free</a>
       <a class="button button-quiet" href="#the-numbers">Show me the numbers</a>
     </div>
     <p class="hero-foot">
-      No card, and no instant signup. We set up accounts by hand at the moment, so you will hear
-      from a person rather than a sequence of emails.
+      Nothing to sign up for. Clone it, point it at a Postgres, and have it working in staging this
+      afternoon. You only pay when real customers are being billed from it.
     </p>
   </div>
 </section>
@@ -199,18 +199,18 @@
         </p>
       </li>
       <li>
-        <h3>Connect it to UsageKit Cloud</h3>
+        <h3>Point it at your control plane</h3>
         <p>
-          Your server asks us who is allowed to call and what they pay, then reports back what was
-          actually delivered. It keeps a cached copy of the answer, so if we are unavailable your
-          customers keep being served from it rather than seeing an error.
+          Your MCP server asks it who is allowed to call and what they pay, then reports back what
+          was actually delivered. It keeps a cached copy of the answer, so a restart or a blip in
+          the control plane leaves your customers being served rather than seeing an error.
         </p>
       </li>
       <li>
-        <h3>We turn it into invoices</h3>
+        <h3>It turns that into invoices</h3>
         <p>
-          At the end of each month we work out what each customer owes and send it to Stripe. You
-          watch that happen on a screen instead of reading a log file.
+          At the end of each month it works out what each customer owes and sends it to Stripe on
+          your behalf. You watch that happen on a screen instead of reading a log file.
         </p>
       </li>
     </ol>
@@ -229,10 +229,11 @@
       something you do not need.
     </p>
     <p class="prose">
-      What you would be paying for here is the other half: the permanent record, the retries when
-      your payment provider is down, the monthly billing run, and somewhere to watch it all
-      happening. That is the part that is genuinely tedious to build and worse to be responsible
-      for at the end of a quarter.
+      What you would be paying for is the other half: the permanent record, the retries when your
+      payment provider is down, the monthly billing run, and somewhere to watch it all happening.
+      That is the part that is genuinely tedious to build and worse to be responsible for at the
+      end of a quarter. Its source is available too, and free until real customers are being billed
+      from it.
     </p>
     <div class="hero-actions">
       <a class="button button-quiet" href="https://github.com/pokitappz/mcp-usage-kit">Take the free meter</a>
@@ -242,14 +243,17 @@
 </section>
 
 <!-- --------------------------------------------------------- request access -->
-<section class="section" id="request-access">
+<section class="section" id="buy">
   <div class="wrap narrow-wrap">
-    <p class="micro">Request access</p>
+    <p class="micro">Going to production</p>
     <h2>Tell us what you are billing for.</h2>
     <p class="prose">
-      We set accounts up by hand at the moment. That is a real limit rather than a waiting list
-      tactic: it means a person looks at every account before it charges anyone a penny. You will
-      get a reply from that person.
+      You do not need us to try it. Clone it, run it, read every line, and put it in staging
+      without asking anybody. This form is for the point where real customers start being billed
+      from it, which is when the $299 a month starts.
+    </p>
+    <p class="prose">
+      You will get a reply from a person, not a sequence of emails.
     </p>
 
     {% match notice %}
@@ -279,7 +283,7 @@
         <label for="note">What are you building? <span class="optional">optional</span></label>
         <textarea id="note" name="note" rows="4" maxlength="2000"></textarea>
       </div>
-      <button class="button" type="submit">Request access</button>
+      <button class="button" type="submit">Get a licence</button>
       <p class="hint">
         We keep what you type here and email you about it. Nothing else happens to it, and there is
         no tracking of any kind on this page.

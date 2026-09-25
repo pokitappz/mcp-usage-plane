@@ -4,11 +4,11 @@
 <section class="page-head">
   <div class="wrap">
     <p class="eyebrow">Pricing</p>
-    <h1>$0.50 per 10,000 billable events. Free under 50,000 a month.</h1>
+    <h1>$299 a month. However much you bill.</h1>
     <p class="lede">
-      One price, charged on the one thing this product exists to count. There is no fee per person,
-      no platform fee, no charge for the open source part, and nothing to negotiate before you can
-      start.
+      You run it on your own servers, against your own database and your own payment provider.
+      Free to read, build and run outside production, so you can have it working in staging this
+      afternoon without talking to anybody.
     </p>
   </div>
 </section>
@@ -17,9 +17,9 @@
   <div class="wrap">
     <div class="panel panel-price">
       <div class="price-head">
-        <p class="micro">UsageKit Cloud</p>
-        <p class="price"><span class="price-figure">$0.50</span> <span class="price-unit">per 10,000 billable events</span></p>
-        <p class="price-note">The first 50,000 every month are free, for every account, every month. Not a trial.</p>
+        <p class="micro">Production licence</p>
+        <p class="price"><span class="price-figure">$299</span> <span class="price-unit">per month, per deployment</span></p>
+        <p class="price-note">Flat. No charge per event, no percentage of what you bill, no seat count, no minimum term.</p>
       </div>
       <ul class="ticks">
         <li>A permanent record of what each customer used and when</li>
@@ -27,85 +27,67 @@
         <li>Charges sent to your payment provider, retried when it is down</li>
         <li>A monthly billing run, and the invoice history behind it</li>
         <li>A dashboard, API keys, and separate keys for your servers</li>
-        <li>Your payment provider keys encrypted before they are stored</li>
+        <li>Every version becomes Apache-2.0 four years after it ships</li>
       </ul>
-      <a class="button" href="/#request-access">Request access</a>
+      <div class="hero-actions">
+        <a class="button" href="https://github.com/pokitappz/mcp-usage-plane">Run it free</a>
+        <a class="button button-quiet" href="/#buy">Buy a licence</a>
+      </div>
     </div>
   </div>
 </section>
 
 <section class="section section-alt">
   <div class="wrap">
-    <p class="micro">Or run it yourself</p>
-    <h2>$299 a month, whatever your volume.</h2>
+    <p class="micro">Free and paid</p>
+    <h2>The line is production, and nothing else.</h2>
     <p class="prose">
-      The same service, on your own servers, against your own database and your own Stripe
-      account. Nothing of yours reaches us, which answers most of what the
-      <a href="/security">security page</a> otherwise has to be careful about.
+      There is one question to answer, and it is not about volume. Are real customers being billed
+      from it? If not, it is free. If so, it is $299 a month.
     </p>
-
-    <div class="panel panel-price">
-      <div class="price-head">
-        <p class="micro">Self-hosted</p>
-        <p class="price"><span class="price-figure">$299</span> <span class="price-unit">per month, per deployment</span></p>
-        <p class="price-note">Flat. No charge per event, no percentage of what you bill, no seat count.</p>
-      </div>
-      <ul class="ticks">
-        <li>Free to read, build and run outside production</li>
-        <li>Evaluate, develop, test and stage without talking to anybody</li>
-        <li>No licence key, no phone-home check, no audit clause</li>
-        <li>Every version becomes Apache-2.0 four years after it ships</li>
-      </ul>
-      <a class="button" href="/#request-access">Talk to us</a>
+    <div class="panel">
+      <table class="figures">
+        <caption class="visually-hidden">What is free and what needs a licence</caption>
+        <thead>
+          <tr><th scope="col">What you are doing</th><th scope="col">What it costs</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Reading the source, to decide whether you trust it</th><td>Free</td></tr>
+          <tr><th scope="row">Building it, modifying it, running the tests</th><td>Free</td></tr>
+          <tr><th scope="row">Running it in development, testing or staging</th><td>Free</td></tr>
+          <tr><th scope="row">Billing real customers from it</th><td>$299 per month</td></tr>
+          <tr><th scope="row">Any version more than four years old</th><td>Free, under Apache-2.0</td></tr>
+        </tbody>
+      </table>
+      <p class="panel-foot">
+        Those terms are the licence, not a summary of it. The
+        <a href="https://github.com/pokitappz/mcp-usage-plane/blob/main/LICENSE.md">Business Source
+        License</a> grants everything except production use, and production use is what the
+        subscription buys.
+      </p>
     </div>
-
-    <p class="prose">
-      The trade is straightforward. Hosted, we run it and you pay for what you use, which is
-      cheaper while you are small. Self-hosted, you run it and the price stops moving, which is
-      cheaper once you are not, and it is the only option if your data cannot leave your own
-      infrastructure.
-    </p>
-    <p class="prose">
-      Buying it is an email. There is nothing to install to prove you paid, because a deployment
-      on your own servers cannot be policed and pretending otherwise would only get in the way of
-      the people who do pay.
-    </p>
   </div>
 </section>
 
 <section class="section">
   <div class="wrap">
-    <p class="micro">What you actually pay, hosted</p>
-    <h2>Three examples, with the arithmetic shown.</h2>
-    <div class="panel">
-      <table class="figures">
-        <caption class="visually-hidden">Monthly cost at three volumes</caption>
-        <thead>
-          <tr>
-            <th scope="col">Billable events in a month</th>
-            <th scope="col" class="numeric">Charged for, after the free 50,000</th>
-            <th scope="col" class="numeric">You pay</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr><th scope="row">40,000</th><td class="numeric">0</td><td class="numeric">$0.00</td></tr>
-          <tr><th scope="row">250,000</th><td class="numeric">200,000</td><td class="numeric">$10.00</td></tr>
-          <tr><th scope="row">1,000,000</th><td class="numeric">950,000</td><td class="numeric">$47.50</td></tr>
-        </tbody>
-      </table>
-
-      <p class="panel-highlight">
-        To put that in proportion: if you charge your own customers two cents per call and you
-        deliver 250,000 of them, you invoice <strong>$5,000</strong> and this costs you
-        <strong>$10</strong>. The whole point of the meter is that the $5,000 is the right number.
-      </p>
-
-      <p class="panel-foot">
-        Above a million events a month the rate comes down. That one is worked out with you rather
-        than published, because at that size the questions that matter are where your data lives
-        and how long it is kept, not the unit price.
-      </p>
-    </div>
+    <p class="micro">Why it is a flat number</p>
+    <h2>Billing you per event would be a strange way to sell a meter.</h2>
+    <p class="prose">
+      Most billing infrastructure takes a slice of what you bill, which means your bill grows
+      exactly when your margins are under most pressure, and it means the vendor has to see your
+      numbers to charge you correctly.
+    </p>
+    <p class="prose">
+      We cannot see your numbers, because the software runs on your machines and reports nothing
+      back. That rules out charging by volume, and honestly it is a better deal: one number you can
+      put in a budget, which does not change when you have a good month.
+    </p>
+    <p class="prose">
+      There is no licence key, no check that phones home, and no audit clause. A deployment on your
+      own servers cannot be policed, and pretending otherwise would only get in the way of the
+      people who do pay.
+    </p>
   </div>
 </section>
 
@@ -114,9 +96,9 @@
     <p class="micro">The thing being counted</p>
     <h2>A billable event is one result your customer actually received.</h2>
     <p class="prose">
-      This matters more than the price next to it, because it is the difference between a bill you
-      can predict and one that goes up when your network has a bad day. We only count an event once
-      a result has genuinely been delivered.
+      You are not charged for these; this is what the software counts on your behalf, so that the
+      invoices <em>you</em> send are right. It only counts an event once a result has genuinely
+      been delivered.
     </p>
     <div class="panel">
       <table class="figures">
@@ -135,9 +117,8 @@
       </table>
       <p class="panel-foot">
         In the measurement on the <a href="/">home page</a>, 45 requests produce 152 billable
-        events, and everything that failed produces none. Your event count is normally a fraction
-        of your request count, which is why the price above is not the frightening number it looks
-        like next to a request count.
+        events, and everything that failed produces none. Charging per request instead would have
+        billed your customer for 453.
       </p>
     </div>
   </div>
@@ -147,23 +128,23 @@
   <div class="wrap narrow-wrap">
     <p class="micro">Questions people ask</p>
     <dl class="faq">
+      <dt>Do you host this?</dt>
+      <dd>Not at the moment. It is yours to run, which means no credential of yours reaches us, no data of yours sits on our machines, and you choose where it lives. If a hosted version is what you actually want, say so and it will count toward building one.</dd>
+
+      <dt>What counts as one deployment?</dt>
+      <dd>One production environment billing one set of customers. Development, staging and disaster-recovery standbys of that same environment are included. A second business line with its own customers is a second deployment.</dd>
+
       <dt>Is the open source part really free?</dt>
-      <dd>Yes, permanently. The meter and the proxy are Apache-2.0 and published for anyone to use. No licence key, nothing reported back to us, and no account needed. What you pay for here is the hosted service around it, and only if you want one.</dd>
+      <dd>Yes, permanently, and it is a different thing from this. The meter and the proxy that measure usage inside your own servers are Apache-2.0 with no licence key and no account. What costs $299 is the control plane around them: the record, the retries, the monthly run and the dashboard.</dd>
 
-      <dt>What happens when I go over 50,000?</dt>
-      <dd>You are charged the published rate on everything above it. The free allowance resets every month, so a quiet month costs you nothing even if the one before it did not.</dd>
-
-      <dt>When am I charged?</dt>
-      <dd>Once, after the month ends. Each invoice records the prices that applied at the time rather than pointing at your current ones, so if we change our pricing later it never rewrites a bill you already received.</dd>
+      <dt>What happens if I stop paying?</dt>
+      <dd>Nothing switches off, because there is nothing in the software that could. You would be using it outside the licence, which is between you and your legal team rather than something we enforce technically. Whatever version you already hold still becomes Apache-2.0 four years after it shipped.</dd>
 
       <dt>Can you see my customers' data?</dt>
-      <dd>No. We store counts against identifiers that you choose. The names of your tools, what was asked and what came back never leave your own servers, and there is nowhere in our database to put them. The <a href="/security">security page</a> shows exactly what is stored.</dd>
-
-      <dt>Which should I choose, hosted or self-hosted?</dt>
-      <dd>Hosted while you are small: under 50,000 billable events a month it costs nothing, and you have no servers to run. Self-hosted once the usage bill passes $299, or immediately if your data is not allowed to leave your own infrastructure. You can move between them; the service is the same either way.</dd>
+      <dd>No, and not as a promise: there is no path by which we could. The software talks to your database and your payment provider, and to nothing of ours. The <a href="/security">security page</a> shows exactly what it stores.</dd>
 
       <dt>What if I want to leave?</dt>
-      <dd>Keep running the meter, which was never ours to take away, and point it somewhere else. Your usage history is exportable and the way the pieces talk to each other is published. Nothing about this arrangement relies on it being painful to walk away from.</dd>
+      <dd>Stop paying and stop using it, or keep the version you have until its Change Date and then carry on under Apache-2.0. Your data was never anywhere but your own database, so there is nothing to export and nobody to ask.</dd>
     </dl>
   </div>
 </section>

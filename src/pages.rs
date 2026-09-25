@@ -254,8 +254,8 @@ async fn home(State(state): State<AppState>, Query(query): Query<HomeQuery>) -> 
                 "/",
                 "Usage billing for MCP servers",
                 "Bill your MCP customers for what they actually received, not for every HTTP \
-                 request. Usage records, automatic charging, and a monthly bill you do not have \
-                 to assemble by hand.",
+                 request. Usage records, automatic charging and a monthly billing run, on your \
+                 own infrastructure.",
             ),
             notice,
             notice_kind,
@@ -271,8 +271,8 @@ async fn pricing(State(state): State<AppState>) -> Response {
                 &state,
                 "/pricing",
                 "Pricing",
-                "$0.50 per 10,000 billable events, free under 50,000 a month. A billable event \
-                 is one result your customer actually received, not one HTTP request.",
+                "$299 a month per production deployment, flat. Free to read, build and run \
+                 outside production. Every version becomes Apache-2.0 four years after it ships.",
             ),
         },
         StatusCode::OK,
@@ -286,8 +286,9 @@ async fn security(State(state): State<AppState>) -> Response {
                 &state,
                 "/security",
                 "Security",
-                "What UsageKit Cloud stores about your customers, how your payment keys are \
-                 encrypted, the limits on every request, and what this service does not do yet.",
+                "What this software stores about your customers, how your payment keys are \
+                 encrypted, the limits on every request, and what it does not do yet. It runs on \
+                 your infrastructure, so none of it reaches us.",
             ),
         },
         StatusCode::OK,
@@ -302,7 +303,7 @@ async fn docs(State(state): State<AppState>) -> Response {
                 "/docs",
                 "Docs",
                 "How to measure usage in an MCP server with the open source UsageKit crates, \
-                 and how to connect it to UsageKit Cloud.",
+                 and how to connect it to a control plane you run yourself.",
             ),
         },
         StatusCode::OK,
@@ -372,7 +373,7 @@ fn optional_count(raw: Option<String>) -> Option<i64> {
 }
 
 fn redirect_home(outcome: &str) -> Response {
-    let location = format!("/?{outcome}#request-access");
+    let location = format!("/?{outcome}#buy");
     let mut response = StatusCode::SEE_OTHER.into_response();
     if let Ok(value) = HeaderValue::from_str(&location) {
         response.headers_mut().insert(header::LOCATION, value);

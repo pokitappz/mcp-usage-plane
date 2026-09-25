@@ -106,48 +106,43 @@
 <section class="section">
   <div class="wrap">
     <p class="micro">The question worth asking</p>
-    <h2>What could somebody who stole our database do to your Stripe account?</h2>
+    <h2>What is our access to your Stripe account?</h2>
     <p class="prose">
-      This is the question to ask any company that connects to your payments, and most of them
-      answer it with a certification logo. Here is the actual answer.
+      This is the question to ask anything that touches your payments, and most vendors answer it
+      with a certification logo. The answer here is unusually short: <strong>none</strong>. Your
+      Stripe key is set on your servers, encrypted in your database, and used by a process you
+      started. It never travels to us, because there is no us in the request path.
     </p>
     <p class="prose">
-      <strong>They could add usage that did not happen.</strong> That is the whole list. The key we
-      hold can write usage events and nothing else: it cannot read your customers, take a payment,
-      issue a refund, or change where your money is paid out. Invented usage also shows up quickly,
-      because we keep the record of what your own servers reported and the two would stop matching.
+      That is worth saying plainly, because it is the main reason to run this rather than buy a
+      hosted meter. Every usage-based billing vendor asks for a credential to your payment
+      provider. This one cannot, and the reason is architectural rather than a policy that could
+      quietly change later.
     </p>
-    <p class="prose">
-      That is not nothing, and we are not going to pretend it is. It is recoverable in a way the
-      alternative is not: if we accepted an ordinary Stripe secret key, the honest answer to the
-      question above would be <em>anything at all</em>, and no part of that would be undoable.
-    </p>
-    <div class="grid grid-two">
+    <div class="grid grid-three">
       <article class="card">
-        <h3>Lock the key to our servers</h3>
+        <h3>It still refuses the dangerous key</h3>
         <p>
-          Stripe lets you attach an access policy to a key so it only works from certain places.
-          Set one and a stolen key is useless anywhere else. We will publish the addresses to allow
-          once this service is deployed; today you can already restrict it by country and block
-          anonymising networks.
+          Even though the key never leaves your infrastructure, the software accepts only a Stripe
+          <strong>restricted</strong> key and turns down a secret one. It writes usage events and
+          needs no other permission, so there is no reason for it to hold something that could take
+          a payment or move your money.
         </p>
       </article>
       <article class="card">
-        <h3>Or do not give us a key at all</h3>
+        <h3>Or no payment key at all</h3>
         <p>
-          We can send your usage to your own server instead, signed so you can check it came from
-          us, and you make the Stripe call yourself. It is more work for you, and it is the right
-          answer if handing over any credential is off the table. Ask and we will set it up.
+          It can post your usage to another service of yours instead, signed so the receiver can
+          check where it came from, and that service makes the Stripe call. Useful when the only
+          machine allowed to hold payment credentials is not this one.
         </p>
       </article>
       <article class="card">
-        <h3>Or run the whole thing yourself</h3>
+        <h3>Lock it down further if you want</h3>
         <p>
-          You can read every line of this service, deploy it against your own database, and point
-          it at your own Stripe account, at which point almost none of this page applies to you:
-          there is no third party, because you are the operator. Free to run outside production,
-          $299 a month in front of real customers, and Apache-2.0 four years after each release.
-          <a href="/pricing">The pricing page</a> has the detail.
+          Stripe lets you attach an access policy to a key so it works only from certain addresses.
+          You know exactly which machines run this, so you can pin it to them, which is a control
+          a hosted vendor could not offer you.
         </p>
       </article>
     </div>
@@ -225,31 +220,21 @@
 
 <section class="section">
   <div class="wrap narrow-wrap">
-    <p class="micro">What we do not do</p>
+    <p class="micro">What it does not do</p>
     <h2>Things worth knowing before you decide.</h2>
     <p class="prose">
-      This is a young service. All of the following are true today, and they are here so you can
-      weigh them now rather than find them later.
+      This is young software. All of the following are true today, and they are here so you can
+      weigh them now rather than find them later. Three of them used to be about how we ran a
+      hosted service; those stopped applying the moment you became the operator, which is most of
+      the argument for running it yourself.
     </p>
     <ul class="limits">
       <li>
-        <strong>One location.</strong> A single deployment and a single database. You cannot choose
-        where your data lives, and there is no automatic failover. An outage here is an outage for
-        everyone, which is exactly why your own server is built to keep serving customers from its
-        cached copy without us.
-      </li>
-      <li>
-        <strong>We do not cut off unpaid accounts.</strong> The service records whether an account
-        is paying, past due or cancelled, and nothing reads that to refuse service. A cancelled
-        account carries on working. That is deliberate for now, and it is written here because
-        assuming the opposite is the expensive mistake.
-      </li>
-      <li>
-        <strong>We hold the encryption key.</strong> You cannot bring your own. Encrypting your
-        Stripe key protects you if the database is stolen; it does not protect you from us. What
-        limits that is the key itself rather than the encryption: we only accept one that can write
-        usage events, so the most anyone here could do with it is record usage that did not happen.
-        Attach a Stripe access policy and even that stops working from anywhere but our servers.
+        <strong>It does not cut off unpaid accounts.</strong> The software records whether one of
+        your customers is paying, past due or cancelled, and nothing reads that to refuse them
+        service. A cancelled customer carries on being served. If you need usage to stop when
+        somebody stops paying, that is a spend limit, which it does support, rather than something
+        the subscription status does for you.
       </li>
       <li>
         <strong>No record of who changed what.</strong> Sign-ins identify a person, and nothing
@@ -257,10 +242,22 @@
         that; the recording is not written yet.
       </li>
       <li>
+        <strong>You hold the encryption key, and there is only one.</strong> The key that encrypts
+        your payment credentials is an environment variable on your own machines. That is better
+        than handing it to a vendor, but it means the usual rules apply: if you lose it the stored
+        credentials cannot be recovered, and if it leaks they can. There is no integration with a
+        hosted key manager yet.
+      </li>
+      <li>
+        <strong>Backups and uptime are yours.</strong> Running it yourself means the database, the
+        failover and the restore drill are your problem. That is the trade for nobody else holding
+        your data, and it is worth being explicit that it is a real cost rather than a free win.
+      </li>
+      <li>
         <strong>Nobody independent has audited this.</strong> There has been no external security
         assessment. When that changes it will be said here, with a date and a name, and not before.
-        In the meantime the code is readable, which is not the same as audited but is more than
-        most services in this position will offer you.
+        In the meantime you can read every line, which is not the same as an audit but is more than
+        most things in this position will offer you.
       </li>
     </ul>
     <p class="prose">

@@ -2,10 +2,10 @@
 
 Usage and entitlement control plane for MCP servers. The paid half of the
 open-core split: the metering crates and the proxy are Apache-2.0, this service
-is source-available under the [Business Source License](#licence). Read it,
-build it and run it outside production for free; production use is **$299 a
-month** per deployment; each version becomes Apache-2.0 four years after it
-ships.
+is source-available under the [Business Source License](#licence). You run it
+yourself; there is no hosted version at the moment. Read it, build it and run it
+outside production for free; production use is **$299 a month** per deployment;
+each version becomes Apache-2.0 four years after it ships.
 
 ```
                           [ control plane ]        <- this service
@@ -460,12 +460,11 @@ gets a first credential without a chicken-and-egg problem.
 
 ## Running it yourself
 
-Nothing in this service assumes we are the ones operating it. Point it at your
-own Postgres and your own Stripe account and no credential of yours reaches us,
-which answers most of what the `/security` page has to be careful about.
+This is how the service is meant to be run: your Postgres, your Stripe account,
+no credential of yours anywhere near us.
 
-Everything below is free to run outside production. Putting it in front of real
-customers needs a subscription; see [Licence](#licence).
+Everything below is free. Putting it in front of real customers needs a
+subscription; see [Licence](#licence).
 
 ```sh
 DATABASE_URL='postgres://...' \
