@@ -1,12 +1,23 @@
-//! PostgreSQL-only SQLx facade for the control plane.
+//! PostgreSQL-only SQLx facade, so MySQL and its RSA dependency stay out of
+//! the lockfile.
 //!
 //! The upstream `sqlx` facade declares every database driver as an optional
-//! dependency. Cargo therefore retains MySQL and its RSA implementation in the
-//! lockfile even when only the `postgres` feature is enabled, which shows up as
-//! RUSTSEC-2023-0071 in `cargo audit` forever. This facade exposes the small
-//! surface the plane uses without resolving those packages.
+//! dependency. Cargo records optional dependencies in `Cargo.lock` whatever
+//! features are selected, so a Postgres-only project still resolves
+//! `sqlx-mysql`, and with it `rsa` and its open advisory RUSTSEC-2023-0071.
+//! `cargo audit` reads the lockfile, so the finding is reported forever even
+//! though nothing built can reach the code.
 //!
-//! Lifted from the same trick in `bm-purchasing/sqlx-postgres-only`.
+//! Note that `cargo tree -i rsa` reports nothing either way: it resolves the
+//! build graph for one target, which is not what `cargo audit` reads.
+//!
+//! This crate depends on `sqlx-core` and `sqlx-postgres` directly and
+//! re-exports the surface a Postgres application uses. It declares
+//! `[lib] name = "sqlx"`, so `sqlx::` paths resolve unchanged.
+//!
+//! The `query!` and `migrate!` macros are deliberately absent: they live in
+//! `sqlx-macros`, which depends on `sqlx-mysql`. See the README for how to
+//! build a `Migrator` without the macro.
 
 pub use sqlx_core::error::{self, Error, Result};
 pub use sqlx_core::executor::{Execute, Executor};
