@@ -19,8 +19,8 @@ Additional Use Grant: None.
                       evaluation, development, testing and staging without a
                       subscription.
 
-                      Production use requires a commercial licence. See
-                      https://usagekit.cloud/pricing
+                      Production use requires a commercial licence. Contact
+                      support@pokitapps.com.
 
 Change Date:          2030-09-25
 
