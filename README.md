@@ -78,8 +78,7 @@ snapshot, and the sidecar cannot authenticate a key it was never given.
 ## Pages
 
 The service renders three things in a browser: sign-in, the dashboard, and a
-404. The marketing site it used to serve lives in
-[`mcp-usage-plane-web`](https://github.com/pokitappz/mcp-usage-plane-web), so a
+404. The marketing site it used to serve lives in its own repository, so a
 crate somebody installs carries what runs the service and nothing else.
 
 | Route | Who | Purpose |
