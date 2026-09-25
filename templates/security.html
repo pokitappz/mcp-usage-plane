@@ -47,14 +47,25 @@
     <p class="micro">Keys and passwords</p>
     <h2>Nothing reusable is stored in a form anyone can read back.</h2>
     <p class="prose">
-      Four separate things, each protected differently, and none of them recoverable from our side.
+      Five separate things, each protected differently, and none of them recoverable from our side.
     </p>
     <div class="grid grid-two">
       <article class="card">
-        <h3>Your payment provider keys are encrypted</h3>
+        <h3>We refuse the dangerous kind of Stripe key</h3>
         <p>
-          Encrypted before they are written down, with a fresh random value per key so two
-          identical keys do not look identical in storage.
+          We only accept a <strong>restricted key</strong>, and we check. Paste an ordinary secret
+          key and the service turns it down and tells you how to create the right one. Stripe
+          describes giving a secret key to a third party as dangerous, and they are right.
+          <span class="aside">Keys beginning <code>rk_</code> only. Checked when you save the
+          setting and again before every request, so a key written straight into the database still
+          cannot be used.</span>
+        </p>
+      </article>
+      <article class="card">
+        <h3>And we encrypt the one we do accept</h3>
+        <p>
+          Encrypted before it is written down, with a fresh random value each time so two identical
+          keys do not look identical in storage.
           <span class="aside">ChaCha20-Poly1305 with a 12 byte nonce per value, stored as
           <code>enc:&lt;base64(nonce||ciphertext)&gt;</code>. A key that is configured but malformed
           stops the service starting rather than quietly storing the next credential unprotected.</span>
@@ -94,6 +105,47 @@
 
 <section class="section">
   <div class="wrap">
+    <p class="micro">The question worth asking</p>
+    <h2>What could somebody who stole our database do to your Stripe account?</h2>
+    <p class="prose">
+      This is the question to ask any company that connects to your payments, and most of them
+      answer it with a certification logo. Here is the actual answer.
+    </p>
+    <p class="prose">
+      <strong>They could add usage that did not happen.</strong> That is the whole list. The key we
+      hold can write usage events and nothing else: it cannot read your customers, take a payment,
+      issue a refund, or change where your money is paid out. Invented usage also shows up quickly,
+      because we keep the record of what your own servers reported and the two would stop matching.
+    </p>
+    <p class="prose">
+      That is not nothing, and we are not going to pretend it is. It is recoverable in a way the
+      alternative is not: if we accepted an ordinary Stripe secret key, the honest answer to the
+      question above would be <em>anything at all</em>, and no part of that would be undoable.
+    </p>
+    <div class="grid grid-two">
+      <article class="card">
+        <h3>Lock the key to our servers</h3>
+        <p>
+          Stripe lets you attach an access policy to a key so it only works from certain places.
+          Set one and a stolen key is useless anywhere else. We will publish the addresses to allow
+          once this service is deployed; today you can already restrict it by country and block
+          anonymising networks.
+        </p>
+      </article>
+      <article class="card">
+        <h3>Or do not give us a key at all</h3>
+        <p>
+          We can send your usage to your own server instead, signed so you can check it came from
+          us, and you make the Stripe call yourself. It is more work for you, and it is the right
+          answer if handing over any credential is off the table. Ask and we will set it up.
+        </p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section section-alt">
+  <div class="wrap">
     <p class="micro">These pages</p>
     <h2>The site enforces its own rules, and a test proves it.</h2>
     <p class="prose">
@@ -117,7 +169,7 @@
   </div>
 </section>
 
-<section class="section section-alt">
+<section class="section">
   <div class="wrap">
     <p class="micro">Limits</p>
     <h2>Every way in has a ceiling on it.</h2>
@@ -144,7 +196,7 @@
   </div>
 </section>
 
-<section class="section">
+<section class="section section-alt">
   <div class="wrap">
     <p class="micro">Checking our work</p>
     <h2>The part that decides what you owe is open source.</h2>
@@ -161,7 +213,7 @@
   </div>
 </section>
 
-<section class="section section-alt">
+<section class="section">
   <div class="wrap narrow-wrap">
     <p class="micro">What we do not do</p>
     <h2>Things worth knowing before you decide.</h2>
@@ -184,7 +236,10 @@
       </li>
       <li>
         <strong>We hold the encryption key.</strong> You cannot bring your own. Encrypting your
-        payment keys protects you if the database is stolen; it does not protect you from us.
+        Stripe key protects you if the database is stolen; it does not protect you from us. What
+        limits that is the key itself rather than the encryption: we only accept one that can write
+        usage events, so the most anyone here could do with it is record usage that did not happen.
+        Attach a Stripe access policy and even that stops working from anywhere but our servers.
       </li>
       <li>
         <strong>No record of who changed what.</strong> Sign-ins identify a person, and nothing

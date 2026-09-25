@@ -78,7 +78,7 @@ impl PlaneBilling {
                 .filter(|value| !value.is_empty())
         };
         Self {
-            stripe_secret: read("PLANE_STRIPE_SECRET_KEY"),
+            stripe_secret: read("PLANE_STRIPE_RESTRICTED_KEY"),
             meter_name: read("PLANE_STRIPE_METER_NAME"),
             stripe_endpoint: read("PLANE_STRIPE_ENDPOINT"),
             webhook_secret: read("PLANE_STRIPE_WEBHOOK_SECRET"),

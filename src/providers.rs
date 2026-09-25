@@ -193,15 +193,50 @@ fn host_ip(url: &reqwest::Url) -> Option<std::net::IpAddr> {
     }
 }
 
+/// What a customer is told when they hand over the wrong kind of Stripe key.
+///
+/// Long, because "invalid key" would send somebody back to the Stripe dashboard
+/// to guess, and what they need to do is three clicks they have probably never
+/// made.
+pub const RESTRICTED_KEY_REQUIRED: &str = "this must be a Stripe restricted key, which starts \
+with rk_. A secret key (sk_) can read your customers, create charges, issue refunds and change \
+your payout destination, and this service needs none of that: it calls one endpoint, \
+POST /v1/billing/meter_events. In the Stripe dashboard choose Create restricted key, grant write \
+on billing meter events and nothing else, then paste that key here";
+
+/// Whether a key is one Stripe considers safe to hand to somebody else.
+///
+/// Matched on the `rk_` prefix rather than on `rk_live_` and `rk_test_`
+/// separately, so an organization-scoped restricted key is not refused for a
+/// naming reason nobody would guess.
+///
+/// This is a good check and not a proof. A customer can create a restricted key
+/// with every permission switched on, and from here that is indistinguishable
+/// from a narrow one. What it rules out is the case Stripe itself calls
+/// dangerous: handing a third party unrestricted access to everything.
+#[must_use]
+pub fn stripe_key_is_restricted(key: &str) -> bool {
+    key.trim().starts_with("rk_")
+}
+
 impl StripeMeterProvider {
     /// Target Stripe's production meter-event endpoint.
     ///
     /// # Errors
     ///
-    /// Returns the underlying client build error.
-    pub fn new(secret_key: String, meter_override: Option<String>) -> Result<Self, reqwest::Error> {
+    /// Refuses any key that is not a restricted key, and reports a message when
+    /// the HTTP client cannot be built.
+    ///
+    /// The check is here as well as where a destination is configured, because
+    /// this is the one path every submission goes through. A row written by a
+    /// migration, by hand, or by a future route that forgets still cannot reach
+    /// Stripe with an unrestricted key.
+    pub fn new(secret_key: String, meter_override: Option<String>) -> Result<Self, &'static str> {
+        if !stripe_key_is_restricted(&secret_key) {
+            return Err(RESTRICTED_KEY_REQUIRED);
+        }
         Ok(Self {
-            http: strict_client()?,
+            http: strict_client().map_err(|_| "could not build an HTTP client")?,
             secret_key,
             endpoint: STRIPE_METER_ENDPOINT.to_owned(),
             meter_override,
@@ -548,6 +583,54 @@ impl MeterEventProvider for WebhookProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_secret_key_cannot_reach_stripe_through_this_provider() {
+        // The configuration route refuses these too, and this is the check
+        // underneath it: whatever put the key there, an unrestricted one never
+        // gets as far as a request.
+        for attempt in [
+            "sk_live_notarealkey",
+            "sk_test_notarealkey",
+            "sk_org_notarealkey",
+            "pk_live_notarealkey",
+            "notarealkey",
+            "",
+        ] {
+            assert!(
+                !stripe_key_is_restricted(attempt),
+                "{attempt} passed the check"
+            );
+            assert!(
+                StripeMeterProvider::new(attempt.to_owned(), None).is_err(),
+                "{attempt} built a provider"
+            );
+        }
+
+        for accepted in [
+            "rk_live_notarealkey",
+            "rk_test_notarealkey",
+            "rk_org_notarealkey",
+        ] {
+            assert!(stripe_key_is_restricted(accepted), "{accepted} was refused");
+            assert!(
+                StripeMeterProvider::new(accepted.to_owned(), None).is_ok(),
+                "{accepted} built no provider"
+            );
+        }
+    }
+
+    #[test]
+    fn the_refusal_says_what_to_do_instead() {
+        // A message that only says "invalid" sends somebody back to a dashboard
+        // to guess, and what they need is not discoverable by guessing.
+        for expected in ["rk_", "sk_", "restricted key", "meter_events"] {
+            assert!(
+                RESTRICTED_KEY_REQUIRED.contains(expected),
+                "the refusal never mentions {expected}"
+            );
+        }
+    }
 
     #[test]
     fn stripe_versions_are_matched_on_the_release_not_the_date() {

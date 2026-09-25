@@ -70,6 +70,18 @@
       to your servers and cannot read or change pricing. The admin token manages customers,
       prices and export configuration, and never belongs in a server's environment.
     </p>
+    <p class="prose">
+      Connecting Stripe takes a <strong>restricted key</strong>, and an ordinary secret key is
+      refused. Create one in the Stripe dashboard with <strong>Create restricted key</strong>,
+      grant write on billing meter events and nothing else, and paste it in. We call exactly one
+      Stripe endpoint, <code>POST /v1/billing/meter_events</code>, so that one permission is all
+      this ever needs. Attaching a Stripe access policy to the key is worth the extra minute.
+    </p>
+    <p class="prose">
+      If you would rather not hand over a Stripe credential at all, we can post your usage to your
+      own endpoint instead, signed with a secret you choose, and you make the Stripe call. Set
+      <code>kind</code> to <code>webhook</code> on the export destination.
+    </p>
     <div class="panel">
       <pre class="code"><code>PLANE_URL=https://usagekit.cloud
 PLANE_EDGE_TOKEN=mup_edge_...</code></pre>

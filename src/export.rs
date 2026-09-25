@@ -81,7 +81,11 @@ pub enum Destination {
     None,
     /// Stripe Billing Meter Events.
     Stripe {
-        /// The account's Stripe secret key.
+        /// The account's Stripe **restricted** key, never a secret key.
+        ///
+        /// Refused at configuration and again in
+        /// [`crate::providers::StripeMeterProvider::new`]. The only Stripe call
+        /// made with it is one write to the meter-event endpoint.
         secret: String,
         /// Meter name override, or the edge's own meter name when absent.
         meter_name: Option<String>,
@@ -577,6 +581,20 @@ async fn set_destination(
         let secret = secret.ok_or_else(|| {
             ApiError::BadRequest(format!("a {kind} destination requires a secret"))
         })?;
+
+        // Refused here as well as in the provider, so the answer arrives while
+        // somebody is looking at the form rather than as a billing run that
+        // quietly does nothing a month later.
+        //
+        // A webhook destination is deliberately exempt: its secret is a signing
+        // secret of the customer's own choosing, and it grants access to
+        // nothing of theirs. That mode is the option for anyone who will not
+        // hand over a Stripe credential at all.
+        if kind == "stripe" && !crate::providers::stripe_key_is_restricted(secret) {
+            return Err(ApiError::BadRequest(
+                crate::providers::RESTRICTED_KEY_REQUIRED.to_owned(),
+            ));
+        }
         let sealing = state.sealing.as_ref().ok_or_else(|| {
             ApiError::BadRequest(format!(
                 "{} must be configured before storing a billing credential",

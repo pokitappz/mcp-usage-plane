@@ -101,6 +101,38 @@ pub fn database_url() -> Option<String> {
     url
 }
 
+/// Seal a value exactly the way the service does, under the test key.
+///
+/// Used to plant a database row that is genuinely valid but holds the wrong
+/// kind of credential, which is the only way to reach the check that lives
+/// below the configuration route.
+///
+/// # Panics
+///
+/// Panics if the test key or the AEAD misbehaves, which would mean the harness
+/// itself is broken.
+#[must_use]
+pub fn seal_with_test_key(plaintext: &str) -> String {
+    use base64::Engine as _;
+    use chacha20poly1305::aead::{Aead, AeadCore as _, OsRng};
+    use chacha20poly1305::{ChaCha20Poly1305, KeyInit};
+
+    let key = base64::engine::general_purpose::STANDARD
+        .decode(SEALING_KEY)
+        .expect("the test sealing key decodes");
+    let cipher = ChaCha20Poly1305::new_from_slice(&key).expect("a usable key");
+    let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext.as_bytes())
+        .expect("the AEAD seals");
+    let mut envelope = nonce.to_vec();
+    envelope.extend_from_slice(&ciphertext);
+    format!(
+        "enc:{}",
+        base64::engine::general_purpose::STANDARD.encode(envelope)
+    )
+}
+
 #[macro_export]
 macro_rules! require_db {
     () => {

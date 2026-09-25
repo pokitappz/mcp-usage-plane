@@ -142,7 +142,7 @@ async fn a_stored_credential_is_never_readable_afterwards() {
         .admin(
             Method::PUT,
             "/v1/export/destination",
-            Some(json!({"kind": "stripe", "secret": "sk_test_supersecret"})),
+            Some(json!({"kind": "stripe", "secret": "rk_test_supersecret"})),
         )
         .await;
     assert_eq!(status, 200);
@@ -154,7 +154,7 @@ async fn a_stored_credential_is_never_readable_afterwards() {
         .await;
     let rendered = view.to_string();
     assert!(
-        !rendered.contains("sk_test_supersecret"),
+        !rendered.contains("rk_test_supersecret"),
         "a stored credential must never come back out: {rendered}"
     );
 
@@ -170,7 +170,7 @@ async fn a_stored_credential_is_never_readable_afterwards() {
         sealed.starts_with("enc:"),
         "credential must be sealed at rest"
     );
-    assert!(!sealed.contains("sk_test_supersecret"));
+    assert!(!sealed.contains("rk_test_supersecret"));
 }
 
 #[tokio::test]
@@ -195,6 +195,105 @@ async fn a_webhook_destination_on_a_private_host_is_refused() {
             .await;
         assert_eq!(status, 400, "endpoint {endpoint}");
     }
+}
+
+#[tokio::test]
+async fn a_stripe_secret_key_is_refused_and_nothing_is_stored() {
+    let db = require_db!();
+    let plane = Plane::start(&db).await;
+
+    // The key this service used to ask for. An sk_ can read every one of the
+    // customer's own customers, create charges, issue refunds and change where
+    // their payouts land. We call one endpoint and need none of it, so holding
+    // one would make a breach of us a breach of their whole Stripe account.
+    for attempt in [
+        "sk_live_notarealkey",
+        "sk_test_notarealkey",
+        "sk_org_notarealkey",
+        "pk_live_notarealkey",
+        "whatever",
+    ] {
+        let (status, body) = plane
+            .admin(
+                Method::PUT,
+                "/v1/export/destination",
+                Some(json!({"kind": "stripe", "secret": attempt})),
+            )
+            .await;
+        assert_eq!(status, 400, "{attempt} was accepted");
+
+        // The refusal has to be usable. "Invalid key" would send somebody back
+        // to a dashboard to guess at three clicks they have never made.
+        let message = body["error"].as_str().unwrap_or_default();
+        for expected in ["rk_", "restricted key", "meter_events"] {
+            assert!(
+                message.contains(expected),
+                "the refusal for {attempt} never mentions {expected}: {message}"
+            );
+        }
+    }
+
+    let pool = sqlx::PgPool::connect(&plane.db_url).await.unwrap();
+    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM export_destinations")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    assert_eq!(stored, 0, "a refused credential was written anyway");
+}
+
+#[tokio::test]
+async fn a_restricted_key_planted_around_the_api_still_cannot_be_bypassed() {
+    let db = require_db!();
+    let fake = FakeStripe::new();
+    let endpoint = spawn_stripe(fake.clone()).await;
+    let plane = Plane::start(&db).await;
+    plane.seed_tenant("acme", "cus_enduser").await;
+
+    // Configure a legitimate destination, then rewrite the sealed credential
+    // out of band to what a migration, a hand-edited row or a future route that
+    // forgets might leave behind. The configuration check cannot see this; the
+    // provider check is the one that has to hold.
+    plane
+        .admin(
+            Method::PUT,
+            "/v1/export/destination",
+            Some(json!({"kind": "stripe", "secret": "rk_test_x", "endpoint": endpoint})),
+        )
+        .await;
+
+    let pool = sqlx::PgPool::connect(&plane.db_url).await.unwrap();
+    let sealed: String =
+        sqlx::query_scalar("SELECT secret_sealed FROM export_destinations LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    // Seal an sk_ with the same key the plane uses, so this is a genuinely
+    // valid row that simply holds the wrong kind of credential.
+    let planted = common::seal_with_test_key("sk_live_notarealkey");
+    assert_ne!(planted, sealed);
+    sqlx::query("UPDATE export_destinations SET secret_sealed = $1")
+        .bind(&planted)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    plane
+        .edge(
+            Method::POST,
+            "/v1/edge/usage",
+            Some(json!({"events": [usage_event("agg-planted", 7)]})),
+        )
+        .await;
+
+    // Give the drain several cycles to do the wrong thing.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        fake.identifiers().is_empty(),
+        "a secret key planted in the database still reached Stripe: {:?}",
+        fake.identifiers()
+    );
 }
 
 #[tokio::test]
@@ -225,7 +324,7 @@ async fn usage_is_forwarded_downstream_and_marked_exported() {
         .admin(
             Method::PUT,
             "/v1/export/destination",
-            Some(json!({"kind": "stripe", "secret": "sk_test_x", "endpoint": endpoint})),
+            Some(json!({"kind": "stripe", "secret": "rk_test_x", "endpoint": endpoint})),
         )
         .await;
     plane
@@ -266,7 +365,7 @@ async fn a_retryable_failure_leaves_the_row_pending_and_is_retried() {
         .admin(
             Method::PUT,
             "/v1/export/destination",
-            Some(json!({"kind": "stripe", "secret": "sk_test_x", "endpoint": endpoint})),
+            Some(json!({"kind": "stripe", "secret": "rk_test_x", "endpoint": endpoint})),
         )
         .await;
     plane
@@ -316,7 +415,7 @@ async fn a_permanent_rejection_is_quarantined_and_reconcilable() {
         .admin(
             Method::PUT,
             "/v1/export/destination",
-            Some(json!({"kind": "stripe", "secret": "sk_test_x", "endpoint": endpoint})),
+            Some(json!({"kind": "stripe", "secret": "rk_test_x", "endpoint": endpoint})),
         )
         .await;
     plane
@@ -405,7 +504,7 @@ async fn a_closed_period_charges_the_floor_when_there_was_no_usage() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
         ],
@@ -475,7 +574,7 @@ async fn the_percentage_applies_once_revenue_passes_the_floor() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
         ],
@@ -557,7 +656,7 @@ async fn a_period_is_charged_once_however_often_the_close_runs() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
             ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),
@@ -1076,7 +1175,7 @@ async fn agreeing_terms_today_does_not_invoice_the_months_before_them() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
             ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),
@@ -1125,7 +1224,7 @@ async fn the_published_per_event_price_bills_end_to_end() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
         ],
@@ -1209,7 +1308,7 @@ async fn usage_inside_the_free_allowance_is_charged_nothing() {
     let plane = Plane::start_with_env(
         &db,
         &[
-            ("PLANE_STRIPE_SECRET_KEY", "sk_test_plane"),
+            ("PLANE_STRIPE_RESTRICTED_KEY", "rk_test_plane"),
             ("PLANE_STRIPE_METER_NAME", "mcp_usage_plane"),
             ("PLANE_STRIPE_ENDPOINT", &endpoint),
             ("EXPORT_DRAIN_INTERVAL_SECONDS", "1"),

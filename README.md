@@ -441,7 +441,7 @@ gets a first credential without a chicken-and-egg problem.
 | `SECRET_SEALING_KEY` | none | Seals customer billing credentials. Required before one can be stored |
 | `EXPORT_DRAIN_INTERVAL_SECONDS` | `30` | How often usage is forwarded |
 | `ALLOW_LOOPBACK_DESTINATIONS` | off | Tests only. Permits a loopback export destination |
-| `PLANE_STRIPE_SECRET_KEY` | none | The plane's own Stripe key. Upstream billing is idle without it |
+| `PLANE_STRIPE_RESTRICTED_KEY` | none | This service's own Stripe **restricted** key, for billing its own customers. Billing is idle without it, and a secret key is refused |
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
 | `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |

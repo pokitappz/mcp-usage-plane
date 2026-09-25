@@ -251,6 +251,12 @@
       which is why this only says whether one is stored. Set it with
       <code>PUT /v1/export/destination</code>.
     </p>
+    <p class="prose">
+      Stripe connections take a <strong>restricted key</strong> beginning <code>rk_</code>, and an
+      ordinary secret key is refused: this only ever writes usage events, so that is the only
+      permission it needs. You can also have us post your usage to your own endpoint instead and
+      make the Stripe call yourself.
+    </p>
 
     <div class="grid grid-three">
       <article class="card">
