@@ -14,14 +14,13 @@ mod app;
 mod auth;
 mod billing;
 mod edge;
-mod email;
 mod error;
 mod export;
 mod pages;
-mod people;
 mod pricing;
 mod providers;
 mod secret;
+mod session;
 mod tenants;
 mod throttle;
 mod tokens;
@@ -60,8 +59,6 @@ pub struct AppState {
     /// their outgoing mail, and it is the one a test caught only by booting
     /// the binary with nothing configured.
     pub product: Branding,
-    /// Transactional email, when configured.
-    pub email: Option<std::sync::Arc<email::EmailClient>>,
     /// Per-token authentication cache and rate limiter.
     ///
     /// `Arc` because `AppState` is cloned per request and the budget has to be
@@ -139,11 +136,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let public_url = public_url_from_env()?;
     let product = Branding::from_env();
-    let mail = email::EmailClient::from_env()?.map(std::sync::Arc::new);
-    if mail.is_none() {
-        tracing::warn!("email is not configured; sign-in codes cannot be delivered");
-    }
-
     let state = AppState {
         pool,
         sealing,
@@ -151,7 +143,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         billing: plane_billing,
         public_url,
         product,
-        email: mail,
         health: std::sync::Arc::new(throttle::HealthProbe::default()),
         admission: std::sync::Arc::new(throttle::Admission::default()),
     };
@@ -169,9 +160,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the period those units are in.
     let biller = tokio::spawn(pricing::close_forever(state.clone(), drain_interval));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::new(bind_address()?, port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "control plane ready");
+    if addr.ip().is_loopback() {
+        tracing::info!(%addr, "control plane ready, reachable only from this host");
+    } else {
+        tracing::warn!(
+            %addr,
+            "control plane is reachable from the network; the dashboard mints \
+             credentials, so put authentication or a private network in front of it \
+             unless this is deliberate"
+        );
+    }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -205,7 +205,7 @@ fn build_router(state: AppState) -> Router {
         .merge(billing::router())
         .merge(tokens::router())
         .merge(pricing::router())
-        .merge(people::router())
+        .merge(session::router())
         .merge(accounts::router())
         .merge(app::router())
         .route("/assets/{file}", routing::get(asset))
@@ -230,6 +230,36 @@ fn build_router(state: AppState) -> Router {
         // opt out of the content security policy by setting its own.
         .layer(axum::middleware::from_fn(web::response_policy))
         .with_state(state)
+}
+
+/// The address to listen on, loopback unless told otherwise.
+///
+/// Loopback by default because of what the dashboard is: `POST /app/tokens` mints
+/// a full admin credential for the account. A service that binds every interface
+/// by default is public until somebody remembers to put something in front of it,
+/// and the failure mode is that whoever finds the URL mints themselves an admin
+/// token. This way it is private until somebody deliberately exposes it.
+///
+/// `PLANE_BIND` takes any address. In a container that usually has to be
+/// `0.0.0.0`, because the port is published from outside the namespace and
+/// loopback inside it is not reachable; the boot log says so at `warn` when the
+/// address is not loopback, rather than letting it pass silently.
+///
+/// # Errors
+///
+/// Rejects a value that is not an IP address, rather than falling back to a
+/// default. A typo in the bind address should not silently publish a service on
+/// every interface, nor silently hide one that was meant to be reachable.
+fn bind_address() -> Result<std::net::IpAddr, Box<dyn std::error::Error>> {
+    let Ok(raw) = std::env::var("PLANE_BIND") else {
+        return Ok(std::net::IpAddr::from([127, 0, 0, 1]));
+    };
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(std::net::IpAddr::from([127, 0, 0, 1]));
+    }
+    raw.parse()
+        .map_err(|_| format!("PLANE_BIND must be an IP address, not {raw:?}").into())
 }
 
 /// The public origin, validated.
@@ -399,6 +429,10 @@ const MIGRATION_FILES: &[(&str, &str)] = &[
     (
         "0008_drop_access_requests.sql",
         include_str!("../migrations/0008_drop_access_requests.sql"),
+    ),
+    (
+        "0009_dashboard_sessions.sql",
+        include_str!("../migrations/0009_dashboard_sessions.sql"),
     ),
 ];
 

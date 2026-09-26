@@ -101,71 +101,25 @@ async fn post(
     into_page(request.send().await.expect("request reaches the plane")).await
 }
 
-/// Create a person on the bootstrap account, the way an operator does by hand.
-async fn invite(plane: &Plane, email: &str) {
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&plane.db_url)
-        .await
-        .expect("connect to the scratch database");
-    let user_id = format!("usr_{}", email.replace(['@', '.'], "_"));
-    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
-        .bind(&user_id)
-        .bind(email)
-        .execute(&pool)
-        .await
-        .expect("insert the user");
-    sqlx::query("INSERT INTO memberships (user_id, account_id) VALUES ($1, $2)")
-        .bind(&user_id)
-        .bind(common::ACCOUNT)
-        .execute(&pool)
-        .await
-        .expect("insert the membership");
-    pool.close().await;
-}
-
-/// Sign in through the browser forms, not the JSON API.
+/// Sign in through the browser form, not the JSON API.
 ///
-/// Deliberately the same path a person takes, so a broken form is a failing
-/// test rather than something only discovered by opening a browser.
-async fn sign_in(plane: &Plane, email: &str) -> String {
-    invite(plane, email).await;
-
-    let started = post(
+/// Deliberately the same path a person takes, so a broken form is a failing test
+/// rather than something only discovered by opening a browser. The credential is
+/// the account's own admin token, which the harness already configures.
+async fn sign_in(plane: &Plane) -> String {
+    let signed_in = post(
         plane,
         "/signin",
         None,
         Some(&plane.base),
-        &[("email", email)],
+        &[("token", common::ADMIN_TOKEN)],
     )
     .await;
-    assert_eq!(started.status, 200, "the sign-in form did not accept it");
-
-    // A debug build with no mail service renders the code on the page, which
-    // is what makes this flow testable without a mail service at all.
-    let marker = "<strong>";
-    let start = started
-        .body
-        .find(marker)
-        .map(|at| at + marker.len())
-        .expect("the development code is shown in a debug build");
-    let code: String = started.body[start..]
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    assert_eq!(code.len(), 6, "expected six digits, got {code:?}");
-
-    let verified = post(
-        plane,
-        "/signin/verify",
-        None,
-        Some(&plane.base),
-        &[("email", email), ("code", &code)],
-    )
-    .await;
-    assert_eq!(verified.status, 303, "the code was not accepted");
-
-    header(&verified, "set-cookie")
+    assert_eq!(
+        signed_in.status, 303,
+        "the sign-in form did not accept the admin token"
+    );
+    header(&signed_in, "set-cookie")
         .split(';')
         .next()
         .expect("a name=value pair")
@@ -220,7 +174,7 @@ async fn the_dashboard_is_gated_by_the_server_and_not_by_the_browser() {
     // be on the real dashboard. Without this, renaming a panel would turn every
     // assertion above into a statement about a string that no longer exists,
     // and the test would keep passing while testing nothing.
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
     let real = get(&plane, "/app", Some(&cookie)).await;
     assert_eq!(real.status, 200);
     for marker in DASHBOARD_MARKERS {
@@ -235,7 +189,7 @@ async fn the_dashboard_is_gated_by_the_server_and_not_by_the_browser() {
 async fn a_signed_in_person_sees_their_account() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let page = get(&plane, "/app", Some(&cookie)).await;
     assert_eq!(page.status, 200);
@@ -252,8 +206,9 @@ async fn a_signed_in_person_sees_their_account() {
         assert!(page.body.contains(panel), "the {panel} panel is missing");
     }
     assert!(
-        page.body.contains("owner@example.com"),
-        "no signed-in identity"
+        page.body.contains(common::ACCOUNT),
+        "the shell does not show which account this session is on, which is the \
+         one thing an operator needs from it to run anything against /v1/*"
     );
 
     // Caller-specific, so it must be out of every cache and every index.
@@ -305,7 +260,7 @@ async fn the_page_shows_the_same_figures_the_api_returns() {
         .sum();
     assert_eq!(total, 5_555, "the API did not report the seeded usage");
 
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
     let page = get(&plane, "/app", Some(&cookie)).await;
 
     // The page groups digits, so the figure a person reads is the figure the
@@ -324,7 +279,7 @@ async fn the_page_shows_the_same_figures_the_api_returns() {
 async fn an_empty_account_says_so_rather_than_rendering_blank_tables() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let page = get(&plane, "/app", Some(&cookie)).await;
     assert!(page.body.contains("No usage recorded"));
@@ -343,7 +298,7 @@ async fn an_empty_account_says_so_rather_than_rendering_blank_tables() {
 async fn a_minted_token_is_shown_once_and_never_put_in_a_url() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let minted = post(
         &plane,
@@ -398,7 +353,7 @@ async fn a_minted_token_is_shown_once_and_never_put_in_a_url() {
 async fn the_last_admin_token_cannot_be_revoked_from_the_dashboard_either() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let (status, tokens) = plane.admin(reqwest::Method::GET, "/v1/tokens", None).await;
     assert_eq!(status, 200);
@@ -434,7 +389,7 @@ async fn the_last_admin_token_cannot_be_revoked_from_the_dashboard_either() {
 async fn a_dead_letter_can_be_resolved_and_leaves_the_queue() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
@@ -490,7 +445,7 @@ async fn a_dead_letter_can_be_resolved_and_leaves_the_queue() {
 async fn every_action_refuses_a_request_from_somewhere_else() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     // A live session plus a missing or foreign Origin. The cookie is
     // SameSite=Lax, so this is the second lock rather than the only one, and it
@@ -555,7 +510,7 @@ async fn an_action_without_a_session_is_refused_whatever_its_origin() {
 async fn signing_out_ends_the_session_for_the_page_too() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
     assert_eq!(get(&plane, "/app", Some(&cookie)).await.status, 200);
 
     let out = post(&plane, "/signout", Some(&cookie), Some(&plane.base), &[]).await;
@@ -569,41 +524,46 @@ async fn signing_out_ends_the_session_for_the_page_too() {
 }
 
 #[tokio::test]
-async fn a_wrong_code_says_one_thing_however_it_was_wrong() {
+async fn a_refused_sign_in_says_one_thing_however_it_was_wrong() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    invite(&plane, "owner@example.com").await;
 
-    let attempt = post(
+    const ONE_MESSAGE: &str = "not a live admin token";
+
+    let wrong = post(
         &plane,
-        "/signin/verify",
+        "/signin",
         None,
         Some(&plane.base),
-        &[("email", "owner@example.com"), ("code", "000000")],
+        &[("token", "mup_admin_not_a_real_token")],
     )
     .await;
-    assert_eq!(attempt.status, 401);
-    assert!(attempt.body.contains("not right, or it has expired"));
+    assert_eq!(wrong.status, 401);
+    assert!(wrong.body.contains(ONE_MESSAGE), "unexpected message");
 
-    // An address with no account is answered identically, so the form cannot
-    // be used to find out who has one.
-    let unknown = post(
+    // An edge token is a real credential for this account and still refused, and
+    // it must not be told apart from a token that does not exist.
+    let edge = post(
         &plane,
-        "/signin/verify",
+        "/signin",
         None,
         Some(&plane.base),
-        &[("email", "nobody@example.com"), ("code", "000000")],
+        &[("token", common::EDGE_TOKEN)],
     )
     .await;
-    assert_eq!(unknown.status, 401);
-    assert!(unknown.body.contains("not right, or it has expired"));
+    assert_eq!(edge.status, 401);
+    assert_eq!(
+        edge.body, wrong.body,
+        "an edge token renders a different page from an unknown token, which tells \
+         a visitor that the token they hold is real but wrongly scoped"
+    );
 }
 
 #[tokio::test]
 async fn a_signed_in_person_is_not_asked_to_sign_in_again() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
 
     let page = get(&plane, "/signin", Some(&cookie)).await;
     assert_eq!(page.status, 303);
@@ -616,7 +576,7 @@ async fn a_signed_in_person_is_not_asked_to_sign_in_again() {
 async fn the_dashboard_uses_the_same_words_the_public_pages_do() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
     let key = plane.seed_tenant("acme", "cus_acme").await;
 
     // Seed the states that only render when something is wrong, because those
@@ -698,7 +658,7 @@ async fn the_dashboard_uses_the_same_words_the_public_pages_do() {
 async fn the_dashboard_holds_to_the_same_markup_rules_as_the_public_pages() {
     let db = require_db!();
     let plane = Plane::start(&db).await;
-    let cookie = sign_in(&plane, "owner@example.com").await;
+    let cookie = sign_in(&plane).await;
     plane.seed_tenant("acme", "cus_acme").await;
 
     // Including the minted-secret page, which is the one most likely to be

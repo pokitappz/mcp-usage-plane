@@ -1,13 +1,9 @@
-//! Creating an account and the person who signs in to it.
+//! Creating an account, and reaching its dashboard afterwards.
 //!
 //! This is the only path from an empty database to somebody able to open the
-//! dashboard. It used to be the access queue, fed by a form on the marketing
-//! site; that site is a separate repository now and the queue went with it, so
-//! provisioning grew an `owner_email` and does the whole job in one request.
-//!
-//! The round trip below is the test that matters. Everything else about
-//! provisioning, including the operator secret and its rate limit, is covered
-//! in the billing suite where those routes were first written.
+//! dashboard, and it is now one request: provisioning returns the account's
+//! `admin` token, and that token is what signs in. There is no person to create,
+//! no password to issue and no mail to send, so there is nothing else to arrange.
 
 mod common;
 
@@ -47,66 +43,44 @@ async fn count(plane: &Plane, sql: &str) -> i64 {
 }
 
 #[tokio::test]
-async fn a_provisioned_owner_can_sign_in_to_the_account() {
+async fn a_provisioned_account_can_be_opened_in_a_browser() {
+    // The whole path, in one request and one form post. Before the dashboard was
+    // authenticated by its own token this took a person, a password, and in the
+    // version before that a mail service.
     let db = require_db!();
     let plane = Plane::start_with_env(&db, &WITH_SECRET).await;
 
     let (status, created) = provision(
         &plane,
-        json!({
-            "name": "Northwind Tools",
-            "provision_secret": common::PROVISION_SECRET,
-            "owner_email": "  Founder@Northwind.Example  "
-        }),
+        json!({"name": "Northwind Tools", "provision_secret": common::PROVISION_SECRET}),
     )
     .await;
     assert_eq!(status, 200, "provisioning failed: {created}");
-    assert_eq!(
-        created["owner_email"], "Founder@Northwind.Example",
-        "the address should be trimmed and reported back"
-    );
-    let account_id = created["account_id"]
-        .as_str()
-        .expect("an account")
-        .to_owned();
+    let admin = created["admin_token"].as_str().expect("a token").to_owned();
+    let account_id = created["account_id"].as_str().expect("an id").to_owned();
 
-    // The half that used to be impossible without writing rows by hand: that
-    // person signs in and reaches their own dashboard. Deliberately using a
-    // different capitalisation, because the lookup is case insensitive only
-    // when the parameter is cast, and that is easy to lose.
-    let started = client()
+    // Nothing about a person comes back, because there is no longer any such
+    // thing to create.
+    for gone in ["owner_email", "owner_password", "owner_sign_in_code"] {
+        assert!(
+            created.get(gone).is_none(),
+            "{gone} is still in the provisioning response: {created}"
+        );
+    }
+
+    let signed_in = client()
         .post(plane.url("/signin"))
         .header(reqwest::header::ORIGIN, &plane.base)
-        .form(&[("email", "founder@northwind.example")])
-        .send()
-        .await
-        .expect("request reaches the plane");
-    assert_eq!(started.status(), 200);
-    let body = started.text().await.expect("a body");
-    let marker = "<strong>";
-    let at = body.find(marker).map(|at| at + marker.len()).expect(
-        "a provisioned owner must be able to get a code; without one the \
-         account exists and nobody can reach it",
-    );
-    let code: String = body[at..]
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    assert_eq!(code.len(), 6);
-
-    let verified = client()
-        .post(plane.url("/signin/verify"))
-        .header(reqwest::header::ORIGIN, &plane.base)
-        .form(&[("email", "FOUNDER@NORTHWIND.EXAMPLE"), ("code", &code)])
+        .form(&[("token", admin.as_str())])
         .send()
         .await
         .expect("request reaches the plane");
     assert_eq!(
-        verified.status(),
+        signed_in.status(),
         303,
-        "the provisioned owner could not sign in"
+        "the provisioned admin token could not open the dashboard"
     );
-    let cookie = verified
+    let cookie = signed_in
         .headers()
         .get(reqwest::header::SET_COOKIE)
         .expect("a session cookie")
@@ -123,124 +97,115 @@ async fn a_provisioned_owner_can_sign_in_to_the_account() {
         .send()
         .await
         .expect("request reaches the plane");
-    assert_eq!(dashboard.status(), 200, "the owner could not reach /app");
+    assert_eq!(dashboard.status(), 200, "could not reach /app");
     let page = dashboard.text().await.expect("a body");
     assert!(
         page.contains("Northwind Tools"),
         "the dashboard is not showing the account that was just created"
     );
+    assert!(
+        page.contains(&account_id),
+        "the dashboard does not show the account id, which is what an operator \
+         needs to run anything against /v1/*"
+    );
 
-    // The tokens still work and are scoped to the new account.
+    // The token still works as a bearer credential too. Exchanging it for a
+    // session must not consume it.
     let (status, _) = plane
-        .send(
-            reqwest::Method::GET,
-            "/v1/tenants",
-            None,
-            created["admin_token"].as_str(),
-        )
+        .send(reqwest::Method::GET, "/v1/tenants", None, Some(&admin))
         .await;
-    assert_eq!(status, 200);
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM memberships").await, 1);
-    let _ = account_id;
+    assert_eq!(status, 200, "signing in spent the admin token");
 }
 
 #[tokio::test]
-async fn an_account_with_no_owner_creates_no_person() {
+async fn provisioning_creates_no_identity_tables_to_populate() {
+    // The tables went with the credential they served. This asserts they are
+    // actually gone rather than dormant, because a table nothing can write to is
+    // a trap for whoever reads the schema next.
     let db = require_db!();
     let plane = Plane::start_with_env(&db, &WITH_SECRET).await;
 
-    // An account that only serves machines needs nobody able to sign in, and
-    // inventing a person for it would be worse than leaving it without one.
-    let (status, created) = provision(
+    let (status, _) = provision(
         &plane,
-        json!({"name": "Machines Only", "provision_secret": common::PROVISION_SECRET}),
+        json!({"name": "Northwind Tools", "provision_secret": common::PROVISION_SECRET}),
     )
     .await;
     assert_eq!(status, 200);
-    assert!(created["owner_email"].is_null());
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM users").await, 0);
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM memberships").await, 0);
 
-    // The tokens are still usable, which is the point of that shape.
-    let (status, _) = plane
-        .send(
-            reqwest::Method::GET,
-            "/v1/tenants",
-            None,
-            created["admin_token"].as_str(),
+    for gone in ["users", "memberships", "user_login_codes", "user_sessions"] {
+        let present = count(
+            &plane,
+            &format!(
+                "SELECT COUNT(*) FROM information_schema.tables \
+                 WHERE table_schema = 'public' AND table_name = '{gone}'"
+            ),
         )
         .await;
-    assert_eq!(status, 200);
+        assert_eq!(present, 0, "{gone} still exists");
+    }
 }
 
 #[tokio::test]
-async fn an_unusable_owner_address_creates_nothing_at_all() {
+async fn an_unusable_name_creates_nothing_at_all() {
     let db = require_db!();
     let plane = Plane::start_with_env(&db, &WITH_SECRET).await;
 
-    for attempt in [
-        "no-at-sign",
-        "two@at@signs",
-        "has space@example.com",
-        "@nolocal",
-    ] {
+    for attempt in ["", "   "] {
         let (status, _) = provision(
             &plane,
-            json!({
-                "name": "Northwind",
-                "provision_secret": common::PROVISION_SECRET,
-                "owner_email": attempt
-            }),
+            json!({"name": attempt, "provision_secret": common::PROVISION_SECRET}),
         )
         .await;
-        assert_eq!(status, 400, "{attempt} was accepted");
+        assert_eq!(status, 400, "{attempt:?} was accepted");
     }
 
     // Refused before the transaction opens, so there is no account left behind
-    // with nobody able to reach it.
-    assert_eq!(
-        count(&plane, "SELECT COUNT(*) FROM accounts").await,
-        1,
-        "expected only the bootstrap account"
-    );
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM users").await, 0);
-
-    // A blank address is absence rather than an error, since the field is
-    // optional and an empty form field is how absence usually arrives.
-    let (status, created) = provision(
-        &plane,
-        json!({
-            "name": "Northwind",
-            "provision_secret": common::PROVISION_SECRET,
-            "owner_email": "   "
-        }),
-    )
-    .await;
-    assert_eq!(status, 200);
-    assert!(created["owner_email"].is_null());
+    // with nothing usable in it. One account exists: the bootstrap one.
+    assert_eq!(count(&plane, "SELECT COUNT(*) FROM accounts").await, 1);
 }
 
 #[tokio::test]
-async fn one_person_can_own_more_than_one_account() {
+async fn provisioning_is_closed_unless_a_secret_is_set() {
+    let db = require_db!();
+    // Deliberately started without `PLANE_PROVISION_SECRET`.
+    let plane = Plane::start(&db).await;
+
+    let (status, _) = provision(
+        &plane,
+        json!({"name": "Northwind Tools", "provision_secret": common::PROVISION_SECRET}),
+    )
+    .await;
+    assert_eq!(
+        status, 404,
+        "a deployment with no provisioning secret is an open account factory"
+    );
+    assert_eq!(count(&plane, "SELECT COUNT(*) FROM accounts").await, 1);
+}
+
+#[tokio::test]
+async fn each_account_gets_its_own_tokens() {
     let db = require_db!();
     let plane = Plane::start_with_env(&db, &WITH_SECRET).await;
 
-    for name in ["First Co", "Second Co"] {
-        let (status, _) = provision(
+    let mut tokens = Vec::new();
+    for name in ["First", "Second"] {
+        let (status, created) = provision(
             &plane,
-            json!({
-                "name": name,
-                "provision_secret": common::PROVISION_SECRET,
-                "owner_email": "founder@example.com"
-            }),
+            json!({"name": name, "provision_secret": common::PROVISION_SECRET}),
         )
         .await;
-        assert_eq!(status, 200, "provisioning {name} failed");
+        assert_eq!(status, 200);
+        tokens.push((
+            created["account_id"].as_str().expect("an id").to_owned(),
+            created["admin_token"].as_str().expect("a token").to_owned(),
+            created["edge_token"].as_str().expect("a token").to_owned(),
+        ));
     }
 
-    // One person, two memberships. The second provision reuses the user rather
-    // than failing on the unique address, which is what makes an operator able
-    // to set up a second account for somebody without a special case.
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM users").await, 1);
-    assert_eq!(count(&plane, "SELECT COUNT(*) FROM memberships").await, 2);
+    assert_ne!(
+        tokens[0].1, tokens[1].1,
+        "two accounts share an admin token"
+    );
+    assert_ne!(tokens[0].2, tokens[1].2, "two accounts share an edge token");
+    assert_ne!(tokens[0].0, tokens[1].0);
 }
