@@ -13,9 +13,9 @@
 //! separate questions, and conflating them is what made the old name
 //! misleading.
 //!
-//! People are a different thing again: a person signs in with a password
-//! against a `users` row, in [`crate::people`]. An account is what gets billed;
-//! a person is who logs in to look at it.
+//! There are no people here either. The dashboard is opened by presenting one
+//! of the account's own admin tokens, in [`crate::session`], so the credentials
+//! minted here are also what signs in to look at the account.
 
 use axum::extract::State;
 use axum::http::HeaderMap;
