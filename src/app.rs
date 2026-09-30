@@ -32,8 +32,8 @@ use sqlx::Row as _;
 use crate::AppState;
 use crate::error::{ApiError, ApiResult};
 use crate::pages::{Shell, render};
-use crate::people::{self, CurrentUser};
 use crate::pricing::micros_to_cents;
+use crate::session::{self, DashboardSession};
 
 /// How much usage history the dashboard shows.
 const WINDOW_DAYS: i64 = 30;
@@ -281,8 +281,8 @@ impl From<crate::tokens::TokenRow> for TokenLine {
 #[template(path = "app.html")]
 struct AppTemplate {
     shell: Shell,
+    account_id: String,
     account_name: String,
-    user_email: String,
     notice: Option<&'static str>,
     notice_kind: &'static str,
     summary: Summary,
@@ -306,21 +306,11 @@ struct SignInTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "signin_code.html")]
-struct SignInCodeTemplate {
-    shell: Shell,
-    email: String,
-    development_code: Option<String>,
-    notice: Option<&'static str>,
-    notice_kind: &'static str,
-}
-
-#[derive(Template)]
 #[template(path = "secret.html")]
 struct SecretTemplate {
     shell: Shell,
+    account_id: String,
     account_name: String,
-    user_email: String,
     eyebrow: &'static str,
     label: String,
     secret: String,
@@ -332,7 +322,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/app", routing::get(dashboard))
         .route("/signin", routing::get(sign_in_page).post(sign_in_start))
-        .route("/signin/verify", routing::post(sign_in_finish))
         .route("/signout", routing::post(sign_out))
         .route("/app/tokens", routing::post(mint_token))
         .route("/app/tokens/{digest}/revoke", routing::post(revoke_token))
@@ -405,7 +394,7 @@ fn outcome_of(error: &ApiError) -> &'static str {
 // -------------------------------------------------------------- dashboard
 
 async fn dashboard(
-    user: Option<CurrentUser>,
+    user: Option<DashboardSession>,
     State(state): State<AppState>,
     Query(query): Query<AppQuery>,
 ) -> ApiResult<Response> {
@@ -447,7 +436,7 @@ async fn dashboard(
             "Usage, limits, bills and API keys for your account.",
         ),
         account_name: account_name.clone(),
-        user_email: user.email.clone(),
+        account_id: user.account_id.clone(),
         notice,
         notice_kind,
         summary: Summary {
@@ -531,17 +520,8 @@ fn describe_terms(pricing: &crate::pricing::Pricing) -> String {
 /// A sign-in form submission.
 #[derive(Debug, Deserialize)]
 pub struct SignInForm {
-    /// The address to send a code to.
-    pub email: String,
-}
-
-/// A code submission.
-#[derive(Debug, Deserialize)]
-pub struct VerifyForm {
-    /// The address the code was sent to.
-    pub email: String,
-    /// The six digits.
-    pub code: String,
+    /// An `admin` token for the account to open.
+    pub token: String,
 }
 
 fn sign_in_shell(state: &AppState) -> Shell {
@@ -549,13 +529,13 @@ fn sign_in_shell(state: &AppState) -> Shell {
         state,
         "/signin",
         "Sign in",
-        "Sign in with a code we email you.",
+        "Open the dashboard with an admin token.",
     )
 }
 
-async fn sign_in_page(user: Option<CurrentUser>, State(state): State<AppState>) -> Response {
-    // Already signed in: send them where they were going rather than asking
-    // for a code they do not need.
+async fn sign_in_page(user: Option<DashboardSession>, State(state): State<AppState>) -> Response {
+    // Already signed in: send them where they were going rather than asking for
+    // a token they do not need to present again.
     if user.is_some() {
         return redirect("/app");
     }
@@ -574,29 +554,28 @@ async fn sign_in_start(
     headers: HeaderMap,
     Form(body): Form<SignInForm>,
 ) -> ApiResult<Response> {
-    let email = body.email.trim().to_owned();
-
-    match people::issue_code(&state, &headers, &email).await {
-        Ok(development_code) => Ok(render(
-            &SignInCodeTemplate {
-                shell: sign_in_shell(&state),
-                email,
-                development_code,
-                notice: None,
-                notice_kind: "",
-            },
-            StatusCode::OK,
-        )),
-        // The address being unusable is the visitor's to fix and is safe to
-        // say. Everything else is answered without distinguishing whether the
-        // address exists, which is the property `issue_code` is built around.
-        Err(ApiError::BadRequest(_)) => Ok(render(
+    match session::sign_in(&state, &headers, &body.token).await {
+        Ok(token) => {
+            let mut response = redirect("/app");
+            response.headers_mut().insert(
+                header::SET_COOKIE,
+                session::session_cookie_for(&state, &token),
+            );
+            Ok(response)
+        }
+        // One message for an unknown address, a disabled one, a locked one and a
+        // wrong password. Telling them apart is telling an attacker which of the
+        // two fields to keep, and whether anybody holds that address here at all.
+        // The same reason it does not say "locked": that is a fact about the
+        // address, and it is also the answer somebody sees while being locked out
+        // by a stranger guessing on their behalf.
+        Err(ApiError::Unauthorized | ApiError::BadRequest(_)) => Ok(render(
             &SignInTemplate {
                 shell: sign_in_shell(&state),
-                notice: Some("That email address does not look valid. Please check it."),
+                notice: Some("That is not a live admin token for any account on this deployment."),
                 notice_kind: "notice-bad",
             },
-            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
         )),
         Err(ApiError::TooManyRequests(_)) => Ok(render(
             &SignInTemplate {
@@ -613,53 +592,18 @@ async fn sign_in_start(
     }
 }
 
-async fn sign_in_finish(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Form(body): Form<VerifyForm>,
-) -> ApiResult<Response> {
-    let email = body.email.trim().to_owned();
-
-    match people::redeem_code(&state, &headers, &email, &body.code).await {
-        Ok(token) => {
-            let mut response = redirect("/app");
-            response.headers_mut().insert(
-                header::SET_COOKIE,
-                people::session_cookie_for(&state, &token),
-            );
-            Ok(response)
-        }
-        // Wrong, expired and already spent are one answer, because telling
-        // them apart is telling an attacker which guess to keep.
-        Err(ApiError::Unauthorized | ApiError::BadRequest(_)) => Ok(render(
-            &SignInCodeTemplate {
-                shell: sign_in_shell(&state),
-                email,
-                development_code: None,
-                notice: Some(
-                    "That code is not right, or it has expired. \
-                     Ask for another and try again.",
-                ),
-                notice_kind: "notice-bad",
-            },
-            StatusCode::UNAUTHORIZED,
-        )),
-        Err(error) => Err(error),
-    }
-}
-
 async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
-    // Not behind `CurrentUser`: signing out with an already invalid session
+    // Not behind `DashboardSession`: signing out with an already invalid session
     // should clear the cookie rather than answer 401. The origin check still
     // applies, so this cannot be triggered from somewhere else as a nuisance.
-    if !people::origin_is_trusted(&headers, state.public_url.as_deref()) {
+    if !session::origin_is_trusted(&headers, state.public_url.as_deref()) {
         return Err(ApiError::Forbidden);
     }
-    people::end_session(&state, &headers).await?;
+    session::end_session(&state, &headers).await?;
     let mut response = redirect("/");
     response
         .headers_mut()
-        .insert(header::SET_COOKIE, people::session_clear_cookie());
+        .insert(header::SET_COOKIE, session::session_clear_cookie());
     Ok(response)
 }
 
@@ -671,7 +615,7 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
 /// does not ride along on a cross-site POST in a current browser; this is the
 /// second lock, and it fails closed on a missing header.
 fn guard(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
-    if people::origin_is_trusted(headers, state.public_url.as_deref()) {
+    if session::origin_is_trusted(headers, state.public_url.as_deref()) {
         Ok(())
     } else {
         Err(ApiError::Forbidden)
@@ -689,7 +633,7 @@ pub struct MintTokenForm {
 
 fn secret_page(
     state: &AppState,
-    user: &CurrentUser,
+    user: &DashboardSession,
     account_name: String,
     eyebrow: &'static str,
     explanation: &'static str,
@@ -699,8 +643,8 @@ fn secret_page(
     render(
         &SecretTemplate {
             shell: Shell::private(state, "/app", "New API key", "A newly created API key."),
+            account_id: user.account_id.clone(),
             account_name,
-            user_email: user.email.clone(),
             eyebrow,
             label,
             secret,
@@ -711,7 +655,7 @@ fn secret_page(
 }
 
 async fn mint_token(
-    user: CurrentUser,
+    user: DashboardSession,
     State(state): State<AppState>,
     headers: HeaderMap,
     Form(body): Form<MintTokenForm>,
@@ -740,7 +684,7 @@ async fn mint_token(
 }
 
 async fn revoke_token(
-    user: CurrentUser,
+    user: DashboardSession,
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(digest): Path<String>,
@@ -755,7 +699,7 @@ async fn revoke_token(
 }
 
 async fn mint_key(
-    user: CurrentUser,
+    user: DashboardSession,
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(tenant_key): Path<String>,
@@ -788,7 +732,7 @@ async fn mint_key(
 }
 
 async fn resolve_dead_letter(
-    user: CurrentUser,
+    user: DashboardSession,
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(identifier): Path<String>,

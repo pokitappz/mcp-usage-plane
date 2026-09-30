@@ -3,10 +3,10 @@
 <section class="page-head page-head-tall">
   <div class="wrap narrow-wrap">
     <p class="eyebrow">Sign in</p>
-    <h1>No password to remember.</h1>
+    <h1>Open your dashboard.</h1>
     <p class="lede">
-      Enter the address your account was set up with and we will email you a code. It lasts ten
-      minutes and works once.
+      Paste an admin token for the account. It is the same token you use against the API, and it is
+      exchanged here for a session cookie, so the browser never keeps the token itself.
     </p>
 
     {% match notice %}
@@ -17,15 +17,16 @@
 
     <form class="form" method="post" action="/signin">
       <div class="field">
-        <label for="email">Email</label>
-        <input id="email" name="email" type="email" autocomplete="email" required
-               maxlength="254" spellcheck="false" autofocus>
+        <label for="token">Admin token</label>
+        <input id="token" name="token" type="password" autocomplete="off" required
+               maxlength="200" spellcheck="false" autofocus>
       </div>
-      <button class="button" type="submit">Email me a code</button>
+      <button class="button" type="submit">Sign in</button>
     </form>
 
     <p class="hint">
-      Accounts are created by whoever runs this deployment. If you do not have one, ask them.
+      Lost it? Mint another with a token you still hold, or with the provisioning secret. There is
+      no password to reset and no email to send one to, because this service sends no mail.
     </p>
   </div>
 </section>

@@ -65,8 +65,7 @@ prices.
 | `GET /v1/pricing/invoices` | admin | Closed periods and what each was charged |
 | `GET /v1/billing` | admin | Subscription status and unbilled units |
 | `PUT /v1/billing` | admin | Link the account to a Stripe customer |
-| `POST /v1/auth/code` | none | Email a sign-in code to a known address |
-| `POST /v1/auth/verify` | none | Redeem a code for a browser session |
+| `POST /v1/auth/session` | none | Exchange an `admin` token for a browser session |
 | `GET /v1/auth/session` | session | Who the caller is and which account they act on |
 | `DELETE /v1/auth/session` | session | Sign out, deleting the session server side |
 | `POST /v1/accounts` | secret | Create an account, its two tokens, and optionally the person who signs in. Closed unless a secret is set |
@@ -84,9 +83,8 @@ crate somebody installs carries what runs the service and nothing else.
 | Route | Who | Purpose |
 |---|---|---|
 | `GET /` | anyone | Redirects to sign-in |
-| `GET /signin` | anyone | Ask for a sign-in code |
-| `POST /signin` | anyone | Send one, then show the code form |
-| `POST /signin/verify` | anyone | Redeem a code and open a session |
+| `GET /signin` | anyone | The sign-in form |
+| `POST /signin` | anyone | Exchange an `admin` token for a session |
 | `POST /signout` | anyone | End the session and clear the cookie |
 | `GET /app` | session | The dashboard. Anonymous gets a redirect, never markup |
 | `POST /app/tokens` | session | Mint an account credential, shown once on the page |
@@ -124,49 +122,76 @@ for its account. That is right for a sidecar and wrong for a browser: any script
 on the page could read it, it does not expire, and it cannot be attributed to a
 person. So the dashboard uses a session instead.
 
-Sign-in is passwordless. A six digit code is emailed to a **known** address,
-redeemed once, and exchanged for an opaque session. Only the session's SHA-256
-reaches the database, the same property `account_tokens` already has, so a
-database disclosure does not hand over live sessions.
+**This service sends no mail at all.** Nothing here has a mail dependency, no
+API key for a mail provider, and no outbound connection except the one to your
+billing provider. That is the trade this makes, and the cost is named below.
+
+Sign-in presents an `admin` token and receives a session. **There is no separate
+credential for the dashboard, and that is the point.** Every action it offers has
+a `/v1/*` equivalent that an `admin` token already performs, so a password or an
+emailed code would be a second, weaker credential invented to reach a subset of
+what its holder could already do, and it would drag in a store, a reset path, and
+a defence against guessing something a person chose. Nothing is escalated by the
+exchange: the session does strictly less than the credential presented to get it.
+
+The exchange is still worth making rather than sending the token on every
+request. What the browser holds afterwards is `HttpOnly`, expires, and dies when
+one row is deleted; the token is none of those things.
 
 | Property | Value |
 |---|---|
 | Cookie | `HttpOnly`, `SameSite=Lax`, `Secure` when `APP_PUBLIC_URL` is https |
 | Session lifetime | 7 days |
-| Code lifetime | 10 minutes, one use |
-| Wrong guesses | 5, then the code is spent rather than reset |
-| Resend cooldown | 60 seconds, enforced in SQL so a race cannot beat it |
+| Stored as | SHA-256 of the session, so a database disclosure hands over none |
+| Accepted scope | `admin` only. An `edge` token cannot open a dashboard |
+| Attempts | 5 per minute per presented token, then 429 |
+| Revocation | Revoking the token stops it opening new sessions; signing out kills one |
 
-Two deliberate refusals. An unknown address gets the same answer as a known one,
-because anything else makes the endpoint an account-existence oracle. And a
-state-changing request with **no** `Origin` header is refused rather than assumed
-friendly, so the CSRF check fails closed.
+**There is no person here.** Every holder of an account's `admin` token is
+indistinguishable, so a session names an account and nothing else. That is a real
+limitation rather than an oversight: attributing an action to a person needs a
+per-person credential, which is the thing this deliberately does without. If you
+need to know who revoked a price, this is not enough for you yet.
 
-An address is matched case-insensitively. The columns are `CITEXT`, but that is
-not enough on its own: a bound parameter arrives as `text`, and Postgres
-resolves `citext = text` by casting the *column* down to text, which compares
-case-sensitively. Every lookup therefore casts the parameter with `$1::citext`.
-Without it somebody invited as `Person@Example.com` who types
-`person@example.com` is simply not found, and because an unknown address is
-answered identically to a known one, they are told a code was sent and wait for
-mail that was never generated.
+**Lost the token?** Mint another with a token you still hold, or with
+`PLANE_PROVISION_SECRET`. There is nothing to reset and no mail to reset it with.
+
+Three deliberate refusals. An unknown token, a revoked one and one with the wrong
+scope are one answer, because telling them apart tells somebody holding a near
+miss which part of it was close. A bearer header is **not** accepted as a session,
+so nothing that can set a header reaches the dashboard without the exchange. And
+a state-changing request with **no** `Origin` header is refused rather than
+assumed friendly, so the CSRF check fails closed.
 
 ## Creating the first account
 
-Nothing can sign in to an empty database, so provisioning creates the account,
-its two tokens and its owner in one request.
+Nothing can sign in to an empty database, so provisioning creates the account and
+its two tokens in one request.
 
 ```sh
 curl -fsS -X POST "$PLANE_URL/v1/accounts" \
   -H 'content-type: application/json' \
   -d '{"name":"Northwind Tools",
-       "provision_secret":"'"$PLANE_PROVISION_SECRET"'",
-       "owner_email":"founder@northwind.example"}'
+       "provision_secret":"'"$PLANE_PROVISION_SECRET"'"}'
 ```
 
-The two tokens come back once and are not recoverable. `owner_email` is
-optional: leave it out for an account that only serves machines, and no person
-is created. Supply it and that address can sign in at `/signin` immediately.
+Both tokens come back once and are not recoverable. The `admin` one is also what
+opens the dashboard, so this response is the whole path from an empty database to
+somebody able to look at it: there is no person to create and no password to
+issue.
+
+To give somebody access without handing over the token you use, mint them their
+own:
+
+```sh
+curl -fsS -X POST "$PLANE_URL/v1/tokens" \
+  -H "authorization: Bearer $PLANE_ADMIN_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"scope":"admin","label":"laptop, for the dashboard"}'
+```
+
+Revoking that one with `DELETE /v1/tokens/{digest}` stops it opening new sessions
+and leaves yours alone, which is as close to per-person access as this gets.
 
 The route answers 404 unless `PLANE_PROVISION_SECRET` is set, which is the
 default, so a fresh deployment is not an open account factory.
@@ -181,7 +206,7 @@ authentication cache, both process-local.
 | Requests per token | 240 / minute | Refused with `429` and a `Retry-After`. Per token, so one customer's sidecar cannot deny service to another |
 | Failed authentications | 120 / minute, process-wide | Counted globally, not per credential. A per-credential budget gives every distinct guess a fresh allowance, which bounds nothing; success uses a separate budget, so this cannot deny a valid caller |
 | Account provisioning | 20 / minute, process-wide | Same reason. There is one operator, so a shared bound cannot lock out a legitimate user |
-| Sign-in codes | 5 / minute per address | Taken explicitly. The per-token budget is spent inside `auth::resolve`, so a route with no bearer extractor never reaches it |
+| Sign-in attempts | 5 / minute per presented token | Taken explicitly. The per-token budget is spent inside `auth::resolve`, so a route with no bearer extractor never reaches it |
 | Code redemptions | 20 / minute per address | Same reason |
 | Authentication cache | 10 seconds | Removes a database round trip from every request. Revoking a token calls through to drop the entry, so revocation does not wait for the TTL |
 | Request body | 64 KiB, or 4 MiB on `/v1/edge/usage` | Only the usage post legitimately carries a large body |
@@ -385,14 +410,9 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
 | `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |
-| `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark, page titles and outgoing mail |
+| `PLANE_BIND` | `127.0.0.1` | Address to listen on. Loopback by default, because the dashboard mints credentials and a service that binds every interface by default is public until somebody remembers not to be. Containers need `0.0.0.0`; the image already sets it |
+| `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark and page titles |
 | `PLANE_PRODUCT_SUFFIX` | none | A second word set apart in the wordmark, as "Cloud" is in "UsageKit Cloud" |
-| `EMAIL_SERVICE_URL` | none | Your transactional email service. Any https endpoint; plaintext only on loopback |
-| `EMAIL_SERVICE_TOKEN` | none | Bearer token for it. Must be set together with the URL |
-| `EMAIL_FROM_ADDRESS` | required with email | The address mail is sent from. No default, because sending as an address you do not own is how a deployment gets blocklisted |
-| `EMAIL_PRODUCT_NAME` | `Usage control plane` | What the mail calls itself, in subjects and bodies |
-| `EMAIL_OPERATOR_ADDRESS` | the from address | Where operational notices are sent |
-| `EMAIL_ALLOW_PLAINTEXT` | off | Permits a plaintext endpoint off loopback, for a mail relay on a private network. The service token then crosses that network in the clear |
 
 ## Running it yourself
 
@@ -414,15 +434,37 @@ The migrations, the templates and the stylesheet are compiled into the binary,
 so that is the whole install: one file, a Postgres, and two variables. There is
 no directory to place beside it and nothing to keep in sync.
 
-Then create your first account and its owner, as above, and sign in at
-`/signin`.
+Add `APP_PUBLIC_URL` before anybody signs in. Without it every state-changing
+human route refuses, because the CSRF check compares `Origin` against it and
+fails closed rather than assuming a request is friendly.
+
+```sh
+APP_PUBLIC_URL='https://plane.example.com' \
+DATABASE_URL='postgres://...' \
+SECRET_SEALING_KEY="$(head -c 32 /dev/urandom | base64)" \
+  mcp-usage-plane
+```
+
+Then create your first account, as above. Sign in at `/signin` by pasting the
+`admin` token it returned, and that is the whole setup: **no mail service to
+configure, and no second credential to manage.**
+
+It listens on `127.0.0.1` unless you set `PLANE_BIND`, so a fresh install is not
+reachable from anywhere else until you decide it should be. Reaching the dashboard
+over an SSH tunnel is the cheapest way to keep it that way:
+
+```sh
+ssh -N -L 8081:127.0.0.1:8081 your-server
+```
+
+If you do expose it, put something in front of it. The dashboard mints
+credentials, so `POST /app/tokens` is worth as much as the token that opened the
+session. The boot log says so at `warn` whenever the bind address is not loopback.
 
 Two things are worth knowing, both deliberate:
 
-- **No branding of ours.** The wordmark, page titles and outgoing mail all read
+- **No branding of ours.** The wordmark and page titles read
   `PLANE_PRODUCT_NAME`, which defaults to something generic rather than to us.
-  `EMAIL_FROM_ADDRESS` has no default at all, because sending as an address you
-  do not own is how a deployment gets blocklisted.
 - **The billing of customers is dormant.** `PLANE_STRIPE_RESTRICTED_KEY` and
   `PLANE_PROVISION_SECRET` are how this service charges *its* customers and
   provisions accounts. Leave them unset and the monthly close returns

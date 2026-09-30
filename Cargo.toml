@@ -5,7 +5,7 @@ members = ["sqlx-postgres-only"]
 [package]
 name = "mcp-usage-plane"
 description = "Usage and entitlement control plane for MCP servers."
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 # Source-available under the Business Source License 1.1. Non-production use is

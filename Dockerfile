@@ -28,4 +28,13 @@ COPY --from=builder /out/mcp-usage-plane /usr/local/bin/mcp-usage-plane
 # whether it was built here, installed from crates.io, or dropped into a
 # scratch image.
 EXPOSE 8081
+
+# The service binds loopback by default, which is right for a binary somebody
+# installs and wrong inside a container: loopback here is inside the network
+# namespace and unreachable from outside it, and publishing the port above is
+# already the deliberate act of exposing this. The dashboard mints credentials,
+# so whatever publishes that port should have authentication or a private network
+# in front of it.
+ENV PLANE_BIND=0.0.0.0
+
 ENTRYPOINT ["/usr/local/bin/mcp-usage-plane"]

@@ -349,7 +349,7 @@ code {
 
 .account-bar { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; font-size: 0.9rem; }
 .account-name { font-weight: 640; }
-.account-email { color: var(--faint); }
+.account-id { color: var(--faint); font-variant-numeric: tabular-nums; }
 
 .inline-form { display: inline; margin: 0; }
 
