@@ -413,6 +413,10 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_BIND` | `127.0.0.1` | Address to listen on. Loopback by default, because the dashboard mints credentials and a service that binds every interface by default is public until somebody remembers not to be. Containers need `0.0.0.0`; the image already sets it |
 | `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark and page titles |
 | `PLANE_PRODUCT_SUFFIX` | none | A second word set apart in the wordmark, as "Cloud" is in "UsageKit Cloud" |
+| `APP_PUBLIC_URL` | none | Public origin of the dashboard. Must be https, or plaintext on `localhost`. Sign-in and every state-changing human route refuse without it, and it makes the session cookie `Secure` |
+| `PLANE_BOOTSTRAP_ACCOUNT_ID` | none | Account ensured at startup. Ignored unless both bootstrap tokens are also set |
+| `PLANE_BOOTSTRAP_ADMIN_TOKEN` | none | Admin token for the bootstrap account |
+| `PLANE_BOOTSTRAP_EDGE_TOKEN` | none | Edge token for the bootstrap account |
 
 ## Running it yourself
 

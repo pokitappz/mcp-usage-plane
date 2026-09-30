@@ -39,8 +39,6 @@ pub struct PlaneBilling {
     pub stripe_secret: Option<String>,
     /// Meter the plane records its customers' processed units against.
     pub meter_name: Option<String>,
-    /// Loopback override for tests.
-    pub stripe_endpoint: Option<String>,
     /// Secret for verifying inbound Stripe webhooks.
     pub webhook_secret: Option<String>,
     /// Shared secret an operator must present to provision an account.
@@ -80,7 +78,6 @@ impl PlaneBilling {
         Self {
             stripe_secret: read("PLANE_STRIPE_RESTRICTED_KEY"),
             meter_name: read("PLANE_STRIPE_METER_NAME"),
-            stripe_endpoint: read("PLANE_STRIPE_ENDPOINT"),
             webhook_secret: read("PLANE_STRIPE_WEBHOOK_SECRET"),
             provision_secret: read("PLANE_PROVISION_SECRET"),
         }
@@ -93,7 +90,7 @@ impl PlaneBilling {
             Some(secret) => Destination::Stripe {
                 secret: secret.clone(),
                 meter_name: self.meter_name.clone(),
-                endpoint: self.stripe_endpoint.clone(),
+                endpoint: None,
             },
             None => Destination::None,
         }
