@@ -409,6 +409,7 @@ gets a first credential without a chicken-and-egg problem.
 | `PLANE_STRIPE_RESTRICTED_KEY` | none | This service's own Stripe **restricted** key, for billing its own customers. Billing is idle without it, and a secret key is refused |
 | `PLANE_STRIPE_METER_NAME` | none | Meter the plane records processed units against |
 | `PLANE_STRIPE_WEBHOOK_SECRET` | none | Verifies inbound Stripe webhooks. The endpoint 404s without it |
+| `PLANE_STRIPE_ENDPOINT` | Stripe's meter events API | Tests only. Points the plane's own billing at a loopback Stripe stand-in; any other host is refused |
 | `PLANE_PROVISION_SECRET` | none | Gates `/v1/accounts`. Provisioning is closed without it, which is the default |
 | `PLANE_BIND` | `127.0.0.1` | Address to listen on. Loopback by default, because the dashboard mints credentials and a service that binds every interface by default is public until somebody remembers not to be. Containers need `0.0.0.0`; the image already sets it |
 | `PLANE_PRODUCT_NAME` | `Usage control plane` | What this deployment calls itself, in the wordmark and page titles |
