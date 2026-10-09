@@ -7,12 +7,15 @@ use reqwest::Method;
 use serde_json::json;
 
 fn usage_event(identifier: &str, customer: &str, units: u64) -> serde_json::Value {
+    // Stamped now, not at a fixed instant: usage commits to the month it
+    // occurred in, and the snapshot reads the current month, so a constant
+    // timestamp passes until the calendar rolls over and then reads as zero.
     json!({
         "identifier": identifier,
         "customer_id": customer,
         "meter": "mcp_units",
         "units": units,
-        "timestamp": 1_789_757_188u64
+        "timestamp": chrono::Utc::now().timestamp()
     })
 }
 
