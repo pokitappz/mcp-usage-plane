@@ -5,7 +5,7 @@ members = ["sqlx-postgres-only"]
 [package]
 name = "mcp-usage-plane"
 description = "Usage and entitlement control plane for MCP servers."
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 # Source-available under the Business Source License 1.1. Non-production use is
@@ -41,8 +41,8 @@ include = [
 # honest: if the published crates are not enough to build a control plane,
 # anyone metering with the free proxy would hit the same wall.
 [dependencies]
-mcp-usage-core = "0.4.0"
-mcp-usage-export = "0.4.0"
+mcp-usage-core = "0.5.0"
+mcp-usage-export = "0.5.0"
 
 # `form` is for the landing page: the request-access and dashboard forms are
 # real HTML posts rather than fetches, so they work with JavaScript disabled.

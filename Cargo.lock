@@ -1037,9 +1037,9 @@ checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
 name = "mcp-usage-core"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b74cb54d118e088979b31746c91a1f91c7ff9de78fcd77dfd2434a955ad7eeac"
+checksum = "53f5842c21ec103badbc0b2fb9229201a550bfdd39db5adc0965e23a2cb5bbc0"
 dependencies = [
  "base64 0.23.1",
  "serde",
@@ -1048,9 +1048,9 @@ dependencies = [
 
 [[package]]
 name = "mcp-usage-export"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abdad06cef5ff2de982e34fd572ed7871d9e67154e1ba6a0d8db45581b18cace"
+checksum = "75347be478f48a31811d31f4a4935412b3b0324530b1e826b78c7f659623b642"
 dependencies = [
  "serde",
  "thiserror",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-usage-plane"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "askama",
  "axum",
