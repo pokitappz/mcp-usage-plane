@@ -55,8 +55,10 @@ tower-http = { version = "0.6.8", default-features = false, features = ["limit",
 
 # Compile-time HTML templates: a typo in a template is a build failure rather
 # than a 500 in front of a customer, and there is no runtime template loading to
-# get wrong in a container.
-askama = "0.16"
+# get wrong in a container. We use the default template directory and syntax,
+# so leave TOML configuration disabled to keep unmaintained basic-toml out of
+# the dependency graph. URL encoding is used in dashboard form actions.
+askama = { version = "0.16", default-features = false, features = ["derive", "std", "urlencode"] }
 
 # Not the `sqlx` umbrella crate. Depending on it puts every optional driver
 # into Cargo.lock whatever features are selected, which means MySQL, which means
