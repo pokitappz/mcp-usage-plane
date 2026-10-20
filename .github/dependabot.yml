@@ -1,0 +1,21 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    # Include weekends; Dependabot's daily interval only runs on weekdays.
+    schedule:
+      interval: cron
+      cronjob: "17 4 * * *"
+      timezone: Etc/UTC
+    # Security fixes can be transitive, as with rustls. Keep manifest changes
+    # explicit and refresh only versions allowed by the workspace requirements.
+    allow:
+      - dependency-type: all
+    versioning-strategy: lockfile-only
+    # Propose available fixes promptly. Full CI and human review gate merges.
+    cooldown:
+      exclude: ["*"]
+    groups:
+      cargo-lockfile:
+        patterns: ["*"]

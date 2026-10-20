@@ -112,24 +112,24 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked --version 0.22.2
-      - name: Check RustSec advisories
-        run: cargo +stable audit
-
-      # A named guard for the thing the advisory check caught once already.
+      # Named guards for dependencies the advisory checks caught previously.
       # Depending on the `sqlx` umbrella crate puts every one of its optional
       # drivers into Cargo.lock whatever features are selected, which brings
       # MySQL and `rsa`. `cargo tree` reports that tree as clean, because it
       # resolves one target's build graph and the lockfile is neither. This
-      # reads the lockfile, which is what `cargo audit` reads.
-      - name: Keep MySQL out of the lockfile
+      # reads the lockfile, which is what `cargo audit` reads. Askama's unused
+      # TOML configuration feature also brings in unmaintained basic-toml.
+      - name: Keep unwanted dependencies out of the lockfile
         run: |
           set -euo pipefail
-          for crate in rsa sqlx-mysql sqlx-sqlite sqlx-macros; do
+          for crate in rsa sqlx-mysql sqlx-sqlite sqlx-macros basic-toml; do
             if grep --quiet "^name = \"$crate\"$" Cargo.lock; then
-              echo "$crate is in Cargo.lock; something is depending on the sqlx umbrella crate" >&2
+              echo "$crate is in Cargo.lock; review dependency features for the sqlx umbrella crate or Askama TOML configuration" >&2
               exit 1
             fi
           done
+      - name: Check RustSec advisories
+        run: cargo +stable audit
 
   deny:
     name: License, source, and ban checks
@@ -141,7 +141,7 @@ jobs:
       - name: Install cargo-deny
         run: cargo +stable install cargo-deny --locked --version 0.20.2
       - name: Check licenses, sources, and bans
-        run: cargo +stable deny --all-features check
+        run: cargo +stable deny --locked --all-features check
 
   image:
     name: Container image builds and serves
